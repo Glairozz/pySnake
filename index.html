@@ -310,7 +310,7 @@
             
             <div class="overlay" id="startOverlay">
                 <div class="overlay-title">SNAKE</div>
-                <div class="overlay-subtitle">Press any direction to start</div>
+                <div class="overlay-subtitle">Press any direction or tap to start</div>
                 <div class="overlay-hint">ARROW KEYS or WASD to move</div>
             </div>
             
@@ -320,7 +320,7 @@
             </div>
             
             <div class="overlay hidden" id="gameOverOverlay">
-                <div class="overlay-title game-over">GAME OVER</div>
+                <div class="overlay-title game-over" id="gameOverTitle">GAME OVER</div>
                 <div class="overlay-score">Score: <span id="finalScore">0</span></div>
                 <div class="overlay-new-high hidden" id="newHighScore">NEW HIGH SCORE!</div>
                 <div class="overlay-hint">Press SPACE or TAP to restart</div>
@@ -370,6 +370,23 @@
         let gameLoop = null;
         let gameState = 'start';
         let particles = [];
+
+        // Progressive difficulty: one step slower every SPEED_STEP_SCORE
+        // points, never below MIN_SPEED.
+        const START_SPEED = 130;
+        const MIN_SPEED = 60;
+        const SPEED_DROP = 15;
+        const SPEED_STEP_SCORE = 50;
+
+        // Keyboard direction keys (arrows + WASD).
+        const DIRS = {
+            'ArrowUp': [0, -1], 'w': [0, -1], 'W': [0, -1],
+            'ArrowDown': [0, 1], 's': [0, 1], 'S': [0, 1],
+            'ArrowLeft': [-1, 0], 'a': [-1, 0], 'A': [-1, 0],
+            'ArrowRight': [1, 0], 'd': [1, 0], 'D': [1, 0],
+        };
+        // On-screen D-pad buttons.
+        const DPAD = { 'up': [0, -1], 'down': [0, 1], 'left': [-1, 0], 'right': [1, 0] };
         
         let touchStartX = 0;
         let touchStartY = 0;
@@ -416,19 +433,29 @@
             direction = { x: 0, y: -1 };
             nextDirection = { x: 0, y: -1 };
             score = 0;
-            speed = 130;
+            speed = START_SPEED;
             particles = [];
             spawnFood();
             updateScoreDisplay();
         }
         
         function spawnFood() {
-            let validPosition = false;
-            while (!validPosition) {
-                food.x = Math.floor(Math.random() * GRID_COUNT);
-                food.y = Math.floor(Math.random() * GRID_COUNT);
-                validPosition = !snake.some(seg => seg.x === food.x && seg.y === food.y);
+            // Collect every free cell so the food never lands on the snake
+            // and so a completely filled board is detected instead of
+            // looping forever.
+            const free = [];
+            for (let x = 0; x < GRID_COUNT; x++) {
+                for (let y = 0; y < GRID_COUNT; y++) {
+                    if (!snake.some(seg => seg.x === x && seg.y === y)) {
+                        free.push({ x, y });
+                    }
+                }
             }
+            if (free.length === 0) {
+                gameOver(true); // board cleared — the player wins
+                return;
+            }
+            food = free[Math.floor(Math.random() * free.length)];
         }
         
         function updateScoreDisplay() {
@@ -561,34 +588,54 @@
             particles.forEach(p => p.draw());
         }
         
+        function getSpeed(currentScore) {
+            return Math.max(MIN_SPEED,
+                START_SPEED - Math.floor(currentScore / SPEED_STEP_SCORE) * SPEED_DROP);
+        }
+
+        function restartGameLoop() {
+            clearInterval(gameLoop);
+            speed = getSpeed(score);
+            gameLoop = setInterval(tick, speed);
+        }
+
+        function maybeSpeedUp() {
+            // Restart the loop only when the score crossed a difficulty step.
+            if (getSpeed(score) !== speed) {
+                restartGameLoop();
+            }
+        }
+
+        function tick() {
+            if (gameState !== 'playing') return; // stray ticks must not advance
+            update();
+            render();
+        }
+
         function update() {
             direction = { ...nextDirection };
-            
+
             const head = { x: snake[0].x + direction.x, y: snake[0].y + direction.y };
-            
-            if (head.x < 0 || head.x >= GRID_COUNT || 
+            const willGrow = head.x === food.x && head.y === food.y;
+            // The tail cell vacates this tick unless the snake is growing,
+            // so it only counts as a collision when the head eats instead.
+            const collisionBody = willGrow ? snake : snake.slice(0, -1);
+
+            if (head.x < 0 || head.x >= GRID_COUNT ||
                 head.y < 0 || head.y >= GRID_COUNT ||
-                snake.some(seg => seg.x === head.x && seg.y === head.y)) {
-                gameOver();
+                collisionBody.some(seg => seg.x === head.x && seg.y === head.y)) {
+                gameOver(false);
                 return;
             }
-            
+
             snake.unshift(head);
-            
-            if (head.x === food.x && head.y === food.y) {
+
+            if (willGrow) {
                 score += 10;
                 updateScoreDisplay();
                 createParticles(food.x, food.y, COLORS.food, 12);
-                spawnFood();
-                
-                if (score % 50 === 0 && speed > 60) {
-                    speed -= 15;
-                    clearInterval(gameLoop);
-                    gameLoop = setInterval(() => {
-                        update();
-                        render();
-                    }, speed);
-                }
+                maybeSpeedUp();
+                spawnFood(); // may end the game if the board filled up
             } else {
                 snake.pop();
             }
@@ -601,10 +648,13 @@
             updateParticles();
         }
         
-        function gameOver() {
+        function gameOver(victory = false) {
             clearInterval(gameLoop);
+            gameLoop = null;
             gameState = 'gameover';
             
+            document.getElementById('gameOverTitle').textContent =
+                victory ? 'BOARD CLEARED!' : 'GAME OVER';
             const isNewHigh = score > highScore;
             if (isNewHigh) {
                 highScore = score;
@@ -625,17 +675,14 @@
             document.getElementById('startOverlay').classList.add('hidden');
             document.getElementById('pauseOverlay').classList.add('hidden');
             document.getElementById('gameOverOverlay').classList.add('hidden');
-            
+
             render();
-            gameLoop = setInterval(() => {
-                update();
-                render();
-            }, speed);
+            restartGameLoop();
         }
         
         function togglePause() {
-            if (gameState !== 'playing') return;
-            
+            if (gameState !== 'playing' && gameState !== 'paused') return;
+
             if (gameLoop) {
                 clearInterval(gameLoop);
                 gameLoop = null;
@@ -644,36 +691,34 @@
             } else {
                 gameState = 'playing';
                 document.getElementById('pauseOverlay').classList.add('hidden');
-                gameLoop = setInterval(() => {
-                    update();
-                    render();
-                }, speed);
+                restartGameLoop();
             }
         }
         
         function handleDirection(dx, dy) {
             const newDir = { x: dx, y: dy };
-            
+            const reverses = direction.x === -dx && direction.y === -dy;
+
             if (gameState === 'start') {
+                // A reversing start (e.g. Down while the snake faces up)
+                // would kill the snake instantly — ignore it instead.
+                if (reverses) return;
                 nextDirection = newDir;
                 startGame();
             } else if (gameState === 'playing') {
-                if (!(direction.x === -dx && direction.y === -dy)) {
+                if (!reverses) {
                     nextDirection = newDir;
                 }
             } else if (gameState === 'paused') {
+                // Any valid direction key also resumes the game.
+                if (!reverses) {
+                    nextDirection = newDir;
+                }
                 togglePause();
             }
         }
         
         document.addEventListener('keydown', (e) => {
-            const keyMap = {
-                'ArrowUp': [0, -1], 'w': [0, -1], 'W': [0, -1],
-                'ArrowDown': [0, 1], 's': [0, 1], 'S': [0, 1],
-                'ArrowLeft': [-1, 0], 'a': [-1, 0], 'A': [-1, 0],
-                'ArrowRight': [1, 0], 'd': [1, 0], 'D': [1, 0],
-            };
-            
             if (e.key === 'p' || e.key === 'P') {
                 if (gameState === 'playing' || gameState === 'paused') {
                     togglePause();
@@ -681,9 +726,9 @@
                 return;
             }
             
-            if (keyMap[e.key]) {
+            if (DIRS[e.key]) {
                 e.preventDefault();
-                handleDirection(...keyMap[e.key]);
+                handleDirection(...DIRS[e.key]);
             }
             
             if ((e.key === ' ' || e.key === 'Enter') && gameState === 'gameover') {
@@ -721,19 +766,22 @@
         document.querySelectorAll('.d-btn').forEach(btn => {
             btn.addEventListener('touchstart', (e) => {
                 e.preventDefault();
-                const dir = btn.dataset.dir;
-                const dirMap = { 'up': [0, -1], 'down': [0, 1], 'left': [-1, 0], 'right': [1, 0] };
-                
-                if (gameState === 'start') {
-                    nextDirection = { x: dirMap[dir][0], y: dirMap[dir][1] };
-                    startGame();
-                } else if (gameState === 'playing') {
-                    const [dx, dy] = dirMap[dir];
-                    if (!(direction.x === -dx && direction.y === -dy)) {
-                        nextDirection = { x: dx, y: dy };
-                    }
-                }
+                handleDirection(...DPAD[btn.dataset.dir]);
             });
+        });
+        
+        // Tap the start screen to begin (handy on touch devices).
+        document.getElementById('startOverlay').addEventListener('click', () => {
+            if (gameState === 'start') {
+                handleDirection(0, -1);
+            }
+        });
+        
+        // Don't keep playing while the tab is hidden in the background.
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && gameState === 'playing') {
+                togglePause();
+            }
         });
         
         document.getElementById('gameOverOverlay').addEventListener('click', () => {
