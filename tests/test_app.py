@@ -8,9 +8,10 @@ import pygame
 import pytest
 
 import snake
-from pysnake.app import SoundBank, run_game
+from pysnake.app import SoundBank, _handle_key, _present, run_game
 from pysnake.config import DIFFICULTIES, GameConfig
-from pysnake.logic import GameState
+from pysnake.logic import Game, GameState
+from pysnake.ui import Renderer, fit_rect
 
 
 def use_dummy_drivers(monkeypatch) -> None:
@@ -57,6 +58,42 @@ def test_sound_bank_never_crashes_without_audio(monkeypatch):
     pygame.quit()
 
 
+def _make_ui(tmp_path, monkeypatch):
+    use_dummy_drivers(monkeypatch)
+    config = GameConfig(data_file=tmp_path / "scores.json", sound=False)
+    game = Game(config)
+    renderer = Renderer(pygame.Surface((config.width, config.height)), config)
+    sound = SoundBank(enabled=False)
+    return game, renderer, sound
+
+
+def test_r_key_restarts_a_live_run(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    game.start()
+    game.score = 40
+    assert _handle_key(pygame.K_r, game, renderer, sound) is True
+    assert game.state is GameState.PLAYING
+    assert game.score == 0
+    pygame.quit()
+
+
+def test_space_starts_from_the_start_screen(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    assert _handle_key(pygame.K_SPACE, game, renderer, sound) is True
+    assert game.state is GameState.PLAYING
+    pygame.quit()
+
+
+def test_volume_keys_adjust_the_sound_bank(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    sound.volume = 0.5
+    assert _handle_key(pygame.K_RIGHTBRACKET, game, renderer, sound) is True
+    assert sound.volume == 0.6
+    assert _handle_key(pygame.K_LEFTBRACKET, game, renderer, sound) is True
+    assert sound.volume == 0.5
+    pygame.quit()
+
+
 def test_cli_arguments_build_a_valid_configuration():
     parser = snake.build_parser()
     args = parser.parse_args(
@@ -73,6 +110,8 @@ def test_cli_arguments_build_a_valid_configuration():
             "42",
             "--no-grid",
             "--no-bonus",
+            "--wrap",
+            "--fullscreen",
             "--mute",
             "--data-file",
             "custom-scores.json",
@@ -88,6 +127,8 @@ def test_cli_arguments_build_a_valid_configuration():
     assert config.seed == 42
     assert config.show_grid is False
     assert config.bonus_food is False
+    assert config.wrap is True
+    assert config.fullscreen is True
     assert config.sound is False
     assert config.data_file == Path("custom-scores.json")
 
@@ -107,3 +148,57 @@ def test_cli_help_works_without_opening_a_window(capsys):
     assert "pure-Python Snake game" in output
     assert "--difficulty" in output
     assert "--seed" in output
+    assert "--wrap" in output
+    assert "--fullscreen" in output
+
+
+# ---------------------------------------------------------------------------
+# Window scaling and volume
+# ---------------------------------------------------------------------------
+
+
+def test_fit_rect_letterboxes_and_centres_the_logical_surface():
+    rect = fit_rect((1200, 800), (600, 650))
+    assert (rect.width, rect.height) == (738, 800)
+    assert rect.x == (1200 - 738) // 2
+    assert rect.y == 0
+
+
+def test_fit_rect_scales_up_a_smaller_window():
+    rect = fit_rect((300, 300), (600, 650))
+    assert (rect.width, rect.height) == (277, 300)
+    assert rect.x == (300 - 277) // 2
+
+
+def test_fit_rect_handles_a_matching_window_and_bad_sizes():
+    assert fit_rect((600, 650), (600, 650)) == pygame.Rect(0, 0, 600, 650)
+    assert fit_rect((0, 0), (600, 650)) == pygame.Rect(0, 0, 1, 1)
+
+
+def test_present_letterboxes_scaled_content(monkeypatch):
+    use_dummy_drivers(monkeypatch)
+    canvas = pygame.Surface((600, 650))
+    canvas.fill((10, 20, 30))
+    screen = pygame.Surface((320, 240))
+    screen.fill((0, 0, 0))
+
+    _present(screen, canvas)
+
+    # The corners are letterbox bars and the centre holds the scaled board.
+    assert screen.get_at((0, 0))[:3] == (15, 15, 25)
+    center = screen.get_at((160, 120))[:3]
+    assert all(
+        abs(channel - expected) <= 4 for channel, expected in zip(center, (10, 20, 30))
+    )
+    pygame.quit()
+
+
+def test_sound_volume_is_clamped_and_toggle_preserves_it(monkeypatch):
+    use_dummy_drivers(monkeypatch)
+    bank = SoundBank(enabled=False, volume=0.8)
+    assert bank.change_volume(0.5) == 1.0
+    assert bank.change_volume(-10) == 0.0
+    assert bank.change_volume(0.3) == 0.3
+    assert bank.toggle() is bank.available
+    assert bank.volume == 0.3
+    pygame.quit()

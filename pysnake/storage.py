@@ -12,7 +12,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,9 @@ from .config import DEFAULT_DATA_FILE
 
 # Keep absurd values from a hand-edited file from producing silly displays.
 MAX_SAVED_VALUE = 1_000_000_000
+
+#: How many recent best scores the leaderboard keeps.
+TOP_SCORES_LIMIT = 5
 
 
 def _non_negative_int(value: Any, default: int = 0) -> int:
@@ -43,6 +46,22 @@ def _non_negative_int(value: Any, default: int = 0) -> int:
     return max(0, min(value, MAX_SAVED_VALUE))
 
 
+def _score_list(value: Any, limit: int = TOP_SCORES_LIMIT) -> list[int]:
+    """Return a sorted, sanitised leaderboard from *value*.
+
+    Only positive integers are kept, so a corrupt file cannot inject blank
+    entries.  The list is always newest-best first and capped at *limit*.
+    """
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        return []
+    scores: list[int] = []
+    for item in value:
+        score = _non_negative_int(item)
+        if score > 0:
+            scores.append(score)
+    return sorted(scores, reverse=True)[: max(0, limit)]
+
+
 @dataclass
 class Stats:
     """Data persisted between sessions."""
@@ -51,14 +70,16 @@ class Stats:
     games_played: int = 0
     last_score: int = 0
     best_length: int = 0
+    top_scores: list[int] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, int]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation."""
         return {
             "high_score": _non_negative_int(self.high_score),
             "games_played": _non_negative_int(self.games_played),
             "last_score": _non_negative_int(self.last_score),
             "best_length": _non_negative_int(self.best_length),
+            "top_scores": _score_list(self.top_scores),
         }
 
     @classmethod
@@ -69,7 +90,30 @@ class Stats:
             games_played=_non_negative_int(data.get("games_played")),
             last_score=_non_negative_int(data.get("last_score")),
             best_length=_non_negative_int(data.get("best_length")),
+            top_scores=_score_list(data.get("top_scores")),
         )
+
+    def add_score(self, score: int) -> bool:
+        """Record *score* on the leaderboard; return True for a new best.
+
+        Zero scores are ignored so an abandoned run does not push a blank
+        entry onto the board.  The returned flag mirrors the old "new high
+        score" check used by the renderer.
+        """
+        value = _non_negative_int(score)
+        if value <= 0:
+            return False
+        is_high = value > self.high_score
+        if is_high:
+            self.high_score = value
+        self.top_scores = sorted([*self.top_scores, value], reverse=True)[
+            :TOP_SCORES_LIMIT
+        ]
+        return is_high
+
+    def leaderboard(self, limit: int = TOP_SCORES_LIMIT) -> list[int]:
+        """Return the best scores, newest-best first."""
+        return self.top_scores[: max(0, limit)]
 
 
 def load_stats(path: str | os.PathLike[str] = DEFAULT_DATA_FILE) -> Stats:

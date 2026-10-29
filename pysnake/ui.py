@@ -11,6 +11,32 @@ import pygame
 from .config import COLORS, DIFFICULTIES, DIFFICULTY_KEYS, GameConfig
 from .logic import BonusFood, EventKind, Food, Game, GameEvent, GameState, Snake
 
+
+def fit_rect(
+    window_size: tuple[int, int],
+    logical_size: tuple[int, int],
+) -> pygame.Rect:
+    """Return a centred rect that fits *logical_size* inside *window_size*.
+
+    The aspect ratio is preserved, which keeps the board square and the HUD
+    readable at any window size (and adds letterbox bars when needed).
+    """
+    window_w, window_h = window_size
+    logical_w, logical_h = logical_size
+    if min(window_w, window_h, logical_w, logical_h) <= 0:
+        return pygame.Rect(0, 0, max(1, window_w), max(1, window_h))
+
+    scale = min(window_w / logical_w, window_h / logical_h)
+    width = max(1, round(logical_w * scale))
+    height = max(1, round(logical_h * scale))
+    return pygame.Rect(
+        (window_w - width) // 2,
+        (window_h - height) // 2,
+        width,
+        height,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Particles
 # ---------------------------------------------------------------------------
@@ -189,7 +215,13 @@ class Renderer:
 
     # -- frame --------------------------------------------------------------
 
-    def draw(self, game: Game, *, sound_enabled: bool = True) -> None:
+    def draw(
+        self,
+        game: Game,
+        *,
+        sound_enabled: bool = True,
+        volume: float = 0.8,
+    ) -> None:
         """Render the complete frame for *game*."""
         self._draw_board()
         self._draw_food(game.food)
@@ -200,11 +232,18 @@ class Renderer:
         self._draw_header(game)
 
         if game.state is GameState.START:
-            self._draw_start_screen(game, sound_enabled)
+            self._draw_start_screen(game, sound_enabled, volume)
         elif game.state is GameState.PAUSED:
-            self._draw_pause_screen(game, sound_enabled)
+            self._draw_pause_screen(game, sound_enabled, volume)
         elif game.state is GameState.GAME_OVER:
             self._draw_game_over_screen(game)
+
+    def _leaderboard_line(self, game: Game) -> str | None:
+        """Describe the persisted top scores, or None when there are none."""
+        scores = game.stats.leaderboard()
+        if not scores:
+            return None
+        return "Top  " + "   ".join(str(score) for score in scores)
 
     # -- board --------------------------------------------------------------
 
@@ -445,7 +484,12 @@ class Renderer:
 
     # -- start screen -------------------------------------------------------
 
-    def _draw_start_screen(self, game: Game, sound_enabled: bool) -> None:
+    def _draw_start_screen(
+        self,
+        game: Game,
+        sound_enabled: bool,
+        volume: float,
+    ) -> None:
         config = self.config
         self.surface.blit(self._overlay(185), (0, 0))
 
@@ -467,8 +511,10 @@ class Renderer:
         ]
         if compact:
             gaps = [max(3, gap // 2) for gap in gaps]
+        leaderboard = None if compact else self._leaderboard_line(game)
         total = title_h + prompt_h + diff_h + body_h
         total += small_h if not compact else 0
+        total += small_h if leaderboard else 0
         total += sum(gaps)
         y = max(6, (config.height - total) // 2)
         center_x = config.width // 2
@@ -514,8 +560,20 @@ class Renderer:
         if compact:
             return
 
-        sound_text = "on" if sound_enabled else "off"
-        controls = f"P pause   G grid   M sound ({sound_text})   ESC quit"
+        if leaderboard is not None:
+            self._text(
+                leaderboard,
+                self.small_font,
+                COLORS["text"],
+                (center_x, y + small_h // 2),
+            )
+            y += small_h + gaps[2]
+
+        sound_state = "off" if not sound_enabled else f"{int(volume * 100)}%"
+        controls = (
+            f"P pause   R restart   G grid   M sound ({sound_state})   "
+            "F11 fullscreen   ESC quit"
+        )
         self._text(
             controls,
             self.small_font,
@@ -527,6 +585,8 @@ class Renderer:
         footer = "Food +10"
         if config.bonus_food:
             footer += f"   Golden food +{config.bonus_points}"
+        if config.wrap:
+            footer += "   Walls wrap"
         self._text(
             footer,
             self.small_font,
@@ -604,37 +664,51 @@ class Renderer:
 
     # -- pause screen -------------------------------------------------------
 
-    def _draw_pause_screen(self, game: Game, sound_enabled: bool) -> None:
+    def _draw_pause_screen(
+        self,
+        game: Game,
+        sound_enabled: bool,
+        volume: float,
+    ) -> None:
         config = self.config
         self.surface.blit(self._overlay(165), (0, 0))
         self._text(
             "PAUSED",
             self.title_font,
             COLORS["accent"],
-            (config.width // 2, int(config.height * 0.36)),
+            (config.width // 2, int(config.height * 0.34)),
         )
         self._text(
             "P or a direction key to resume",
             self.body_font,
             COLORS["text"],
-            (config.width // 2, int(config.height * 0.48)),
+            (config.width // 2, int(config.height * 0.45)),
         )
+        sound_state = "off" if not sound_enabled else f"{int(volume * 100)}%"
         status = (
             f"Grid: {'on' if self.grid_visible else 'off'}    "
-            f"Sound: {'on' if sound_enabled else 'off'}    "
+            f"Sound: {sound_state}    "
+            f"Walls: {'wrap' if config.wrap else 'solid'}    "
             f"Difficulty: {game.difficulty.label.title()}"
         )
         self._text(
             status,
             self.small_font,
             COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.57)),
+            (config.width // 2, int(config.height * 0.54)),
+        )
+        hints = "R restarts   [ ] changes volume   G grid   M sound"
+        self._text(
+            hints,
+            self.small_font,
+            COLORS["dim_text"],
+            (config.width // 2, int(config.height * 0.62)),
         )
         self._text(
             "ESC quits the game",
             self.small_font,
             COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.66)),
+            (config.width // 2, int(config.height * 0.71)),
         )
 
     # -- game over ----------------------------------------------------------
@@ -676,15 +750,23 @@ class Renderer:
             COLORS["dim_text"],
             (config.width // 2, int(config.height * 0.58)),
         )
+        leaderboard = self._leaderboard_line(game)
+        if leaderboard is not None:
+            self._text(
+                leaderboard,
+                self.small_font,
+                COLORS["text"],
+                (config.width // 2, int(config.height * 0.65)),
+            )
         self._text(
             "Press SPACE or ENTER to play again",
             self.body_font,
             COLORS["text"],
-            (config.width // 2, int(config.height * 0.71)),
+            (config.width // 2, int(config.height * 0.74)),
         )
         self._text(
             "ESC quits the game",
             self.small_font,
             COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.80)),
+            (config.width // 2, int(config.height * 0.82)),
         )

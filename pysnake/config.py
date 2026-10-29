@@ -130,6 +130,8 @@ class GameConfig:
     bonus_lifetime: int = 50
     bonus_points: int = 30
     data_file: Path = field(default_factory=lambda: DEFAULT_DATA_FILE)
+    wrap: bool = False
+    fullscreen: bool = False
 
     def __post_init__(self) -> None:
         """Normalise the data-file path and reject impossible settings."""

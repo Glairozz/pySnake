@@ -2,12 +2,12 @@
 
 A polished Snake game written in pure Python with [pygame](https://www.pygame.org/).
 It keeps the classic rules, adds a proper start/pause/game-over flow, three
-difficulty levels, temporary bonus food, persistent statistics, generated
-sound effects and configurable board sizes — with no external art or audio
-assets.
+difficulty levels, temporary bonus food, wrap-around edges, a persistent
+top-five leaderboard, generated sound effects and configurable board sizes —
+with no external art or audio assets.
 
 The game rules are completely independent of pygame and are covered by an
-automated test suite that runs headlessly.
+automated test suite that runs headlessly on Linux, macOS and Windows.
 
 ## Features
 
@@ -15,22 +15,27 @@ automated test suite that runs headlessly.
   so speed stays consistent on fast and slow machines.
 - Responsive input with a two-turn buffer. Rapid turns are preserved, while
   180° reversals are always rejected.
-- Start screen, pause/resume, game-over screen, restart and a "board cleared"
-  victory state.
+- Start screen, pause/resume, game-over screen, instant restart and a "board
+  cleared" victory state.
 - Three difficulty levels (Easy, Normal, Hard) that increase speed as the
   score grows.
+- Classic solid walls or an optional wrap-around board (`--wrap`) where the
+  snake reappears on the opposite edge.
 - Food never spawns inside the snake. Wall and self-collision detection is
   accurate, including the classic "follow your own tail" rule.
 - Golden bonus food appears every five regular foods, is worth 30 points and
   expires after a limited number of moves.
-- High score and basic statistics persist between sessions in an atomically
-  written JSON file.
-- Toggleable grid and sound effects. Sounds are synthesised at runtime, so
-  there are no audio files to download.
-- Configurable board dimensions, cell size, difficulty and random seed via
-  command-line options.
+- A persistent top-five leaderboard, high score and play statistics, saved in
+  an atomically written JSON file.
+- Toggleable grid and sound effects with adjustable volume. Sounds are
+  synthesised at runtime, so there are no audio files to download.
+- Resizable window with aspect-ratio-preserving letterboxing, plus a
+  fullscreen toggle (`F11`).
+- Configurable board dimensions, cell size, difficulty, edge mode and random
+  seed via command-line options.
 - The game auto-pauses when the window loses focus.
-- Score, best score, difficulty and progress feedback are always visible.
+- Score, best score, difficulty, leaderboard and progress feedback are always
+  visible.
 
 ## Requirements
 
@@ -57,18 +62,22 @@ pip install -r requirements.txt
 python snake.py
 ```
 
-The default board is 24 × 24 cells with a 600 × 650 window.
+The default board is 24 × 24 cells with a 600 × 650 window. The window is
+resizable, and `F11` toggles fullscreen; the board scales without distortion.
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
 | Arrow keys / WASD | Start the game, steer, or resume from pause |
+| `SPACE` / `ENTER` | Start from the start screen, or restart after game over |
 | `P` | Pause / resume |
+| `R` | Restart the current run immediately (also works after game over) |
 | `1`, `2`, `3` | Choose Easy, Normal or Hard on the start screen |
-| `SPACE`, `ENTER` or `R` | Restart after game over |
 | `G` | Show / hide the grid |
 | `M` | Mute / unmute sound effects |
+| `[` / `]` (or `-` / `+`) | Lower / raise the sound-effect volume |
+| `F11` | Toggle fullscreen |
 | `ESC` | Quit |
 
 Notes:
@@ -76,6 +85,8 @@ Notes:
 - A direction key that would reverse the snake into its own neck is ignored.
 - Up to two turns can be buffered, so two quick key presses both execute.
 - The game pauses automatically when the window loses focus.
+- The window can be resized freely; the board keeps its aspect ratio and is
+  centred with letterbox bars when necessary.
 
 ## Gameplay
 
@@ -83,8 +94,17 @@ Notes:
 |------|-------|
 | Regular food | 10 points, grows the snake by one segment |
 | Golden bonus food | 30 points, appears every 5 regular foods, expires after 50 moves |
-| High score | Saved after game over, and when quitting mid-run with a new record |
+| High score | Saved after game over, restart or quitting mid-run |
+| Leaderboard | The best 5 scores persist between sessions |
 | Board cleared | Reaching every cell ends the run in victory |
+
+### Edge modes
+
+By default the board has solid walls, so touching an edge ends the run.
+Pass `--wrap` to play on a wrap-around board: leaving one edge immediately
+reappears on the opposite edge. Wrapping never teleports the snake into its
+own body — self-collisions are still detected normally, and the board can
+still be cleared for a victory.
 
 ### Difficulty levels
 
@@ -114,6 +134,9 @@ python snake.py --data-file scores/highscore.json --no-grid
 
 # Disable the golden bonus food or start muted
 python snake.py --no-bonus --mute
+
+# Play on a wrap-around board in fullscreen
+python snake.py --wrap --fullscreen
 ```
 
 | Option | Description |
@@ -126,6 +149,8 @@ python snake.py --no-bonus --mute
 | `--data-file PATH` | High-score/statistics file (default `highscore.json` next to `snake.py`) |
 | `--no-grid` | Start with the grid hidden (toggle with `G`) |
 | `--no-bonus` | Disable golden bonus food |
+| `--wrap` | Wrap around the edges instead of hitting solid walls |
+| `--fullscreen` | Start in fullscreen (toggle with `F11`) |
 | `--mute` | Start with sound muted (toggle with `M`) |
 
 Board dimensions are fixed for the session. The window is validated before it
@@ -140,7 +165,8 @@ By default the game stores its data in `highscore.json` next to `snake.py`:
   "high_score": 240,
   "games_played": 12,
   "last_score": 80,
-  "best_length": 18
+  "best_length": 18,
+  "top_scores": [240, 180, 120, 90, 80]
 }
 ```
 
@@ -148,6 +174,9 @@ By default the game stores its data in `highscore.json` next to `snake.py`:
   an interrupted write cannot leave a partially written score file.
 - Missing, unreadable, corrupt or hand-edited files are handled gracefully;
   invalid fields fall back to safe defaults and the game still starts.
+- Scores are sanitised, sorted best-first and trimmed to the best five. A run
+  that is abandoned with `R` still reaches the leaderboard, but it does not
+  increment `games_played`.
 - Older files containing only `{"high_score": 120}` are still supported.
 - Use `--data-file` if the game directory is read-only or you want separate
   score files for different configurations.
@@ -165,11 +194,15 @@ The tests run headlessly: the game-logic tests need only the standard library,
 and the smoke tests select SDL's dummy video and audio drivers. They cover:
 
 - movement in every direction, turn buffering and rejected reversals
-- wall collisions, body collisions and the vacating-tail rule
+- solid-wall and wrap-around edges, body collisions and the vacating-tail rule
 - food spawning, full boards, scoring, bonus food and expiry
-- all state transitions, restart, victory and game over
-- high-score and statistics persistence, including corrupt/invalid files
-- configuration validation and the pygame loop/CLI smoke tests
+- all state transitions, restart, instant restart, victory and game over
+- high-score, leaderboard and statistics persistence, including corrupt files
+- window scaling, sound volume, configuration validation and pygame/CLI smoke
+  tests
+
+Continuous integration runs the full suite on Python 3.9, 3.11 and 3.12, plus
+Ruff linting and formatting checks, via GitHub Actions.
 
 Run a single group, for example:
 
@@ -192,8 +225,10 @@ tests/
   test_storage.py     Persistence and invalid-data tests
   test_app.py         Headless pygame smoke tests and CLI tests
 pytest.ini            Pytest configuration
+pyproject.toml        Ruff lint/format configuration
 requirements.txt      Runtime dependency (pygame)
-requirements-dev.txt  Test dependencies
+requirements-dev.txt  Test and lint dependencies
+.github/workflows/    GitHub Actions continuous integration
 index.html            Legacy optional browser demo (not part of the Python game)
 ```
 
@@ -224,7 +259,8 @@ python snake.py --data-file ~/pysnake-scores.json
 **The window is too large or too small**
 Adjust `--cols`, `--rows` and `--cell-size`. The game refuses combinations
 larger than 2400 pixels in either dimension rather than opening an unusable
-window.
+window. Once running, drag the window edges to resize it or press `F11` for
+fullscreen; scaling keeps the board centred and undistorted.
 
 **The game feels too fast or too slow**
 Choose a different difficulty on the start screen (`1`, `2`, `3`) or restart

@@ -103,6 +103,7 @@ class Snake:
         self.cols = config.cols
         self.rows = config.rows
         self.start_length = config.start_length
+        self.wrap = config.wrap
         self.body: list[Cell] = []
         self.direction: Direction = (0, -1)
         self._pending: deque[Direction] = deque()
@@ -156,17 +157,23 @@ class Snake:
     def move(self) -> bool:
         """Advance one step; return False on a wall or body collision.
 
-        The tail cell is exempt while it is vacating this tick (unless the
-        snake is growing), so following your own tail remains legal.
+        In wrap mode the snake leaves one edge and reappears on the opposite
+        edge instead of hitting a wall.  The tail cell is exempt while it is
+        vacating this tick (unless the snake is growing), so following your
+        own tail remains legal.
         """
         if self._pending:
             self.direction = self._pending.popleft()
 
         head_x, head_y = self.head
-        new_head = (head_x + self.direction[0], head_y + self.direction[1])
-        x, y = new_head
-        if not (0 <= x < self.cols and 0 <= y < self.rows):
+        x = head_x + self.direction[0]
+        y = head_y + self.direction[1]
+        if self.wrap:
+            x %= self.cols
+            y %= self.rows
+        elif not (0 <= x < self.cols and 0 <= y < self.rows):
             return False
+        new_head = (x, y)
 
         occupied = self.body if self.grow else self.body[:-1]
         if new_head in occupied:
@@ -321,10 +328,31 @@ class Game:
         """Start a fresh run after game over."""
         if self.state is not GameState.GAME_OVER:
             return False
+        return self._begin_fresh_run()
+
+    def restart_run(self) -> bool:
+        """Abandon the current run and immediately start a new one.
+
+        This is the in-game ``R`` shortcut: it works while playing or paused
+        so a bad run never forces the player to quit.  The current score is
+        kept on the leaderboard, just like a regular game over.
+        """
+        if self.state not in (GameState.PLAYING, GameState.PAUSED):
+            return False
+        self._record_current_run()
+        return self._begin_fresh_run()
+
+    def _begin_fresh_run(self) -> bool:
         self._reset_run()
         self.state = GameState.PLAYING
         self._emit(EventKind.STARTED)
         return True
+
+    def _record_current_run(self) -> None:
+        """Persist the current score without counting an extra finished game."""
+        if self.score > 0:
+            self.stats.add_score(self.score)
+            save_stats(self.stats, self.config.data_file)
 
     def _reset_run(self) -> None:
         """Clear everything that belongs to a single run."""
@@ -411,8 +439,7 @@ class Game:
             self.config.cols * self.config.rows,
         )
         self.stats.best_length = max(self.stats.best_length, final_length)
-        if self.is_new_high:
-            self.stats.high_score = self.score
+        self.stats.add_score(self.score)
         save_stats(self.stats, self.config.data_file)
 
         if self.is_new_high:
@@ -423,12 +450,15 @@ class Game:
         )
 
     def abandon(self) -> None:
-        """Persist a new best score when the player quits mid-run."""
+        """Persist the current run when the player quits mid-run.
+
+        A new best score is never lost and a good run still reaches the
+        leaderboard, but ``games_played`` is only incremented by a real game
+        over so quitting does not inflate the statistics.
+        """
         if self.state not in (GameState.PLAYING, GameState.PAUSED):
             return
-        if self.score > self.stats.high_score:
-            self.stats.high_score = self.score
-            save_stats(self.stats, self.config.data_file)
+        self._record_current_run()
 
     # -- events -------------------------------------------------------------
 

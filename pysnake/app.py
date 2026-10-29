@@ -15,12 +15,13 @@ from typing import ClassVar
 import pygame
 
 from .config import (
+    COLORS,
     MAX_FRAME_TIME,
     RENDER_FPS,
     GameConfig,
 )
 from .logic import EventKind, Game, GameEvent, GameState
-from .ui import Renderer
+from .ui import Renderer, fit_rect
 
 DIRECTION_KEYS: dict[int, tuple[int, int]] = {
     pygame.K_UP: (0, -1),
@@ -36,7 +37,15 @@ DIRECTION_KEYS: dict[int, tuple[int, int]] = {
 RESTART_KEYS = {
     pygame.K_SPACE,
     pygame.K_RETURN,
-    pygame.K_r,
+}
+
+VOLUME_STEP = 0.1
+VOLUME_DOWN_KEYS = {pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS}
+VOLUME_UP_KEYS = {
+    pygame.K_RIGHTBRACKET,
+    getattr(pygame, "K_PLUS", pygame.K_EQUALS),
+    pygame.K_EQUALS,
+    pygame.K_KP_PLUS,
 }
 
 DIFFICULTY_KEYS = {
@@ -70,9 +79,10 @@ class SoundBank:
         EventKind.VICTORY: (990.0, 0.25, 0.24),
     }
 
-    def __init__(self, enabled: bool = True) -> None:
+    def __init__(self, enabled: bool = True, volume: float = 0.8) -> None:
         self.enabled = False
         self.available = False
+        self.volume = max(0.0, min(1.0, volume))
         self._sounds: dict[EventKind, pygame.mixer.Sound] = {}
         self._build()
         self.enabled = enabled and self.available
@@ -91,6 +101,7 @@ class SoundBank:
                 kind: self._tone(frequency, duration, volume)
                 for kind, (frequency, duration, volume) in self._FREQUENCIES.items()
             }
+            self._apply_volume()
             self.available = True
         except (pygame.error, OSError, ValueError):
             self.enabled = False
@@ -119,6 +130,16 @@ class SoundBank:
             for _ in range(channels):
                 samples.append(value)
         return pygame.mixer.Sound(buffer=samples.tobytes())
+
+    def _apply_volume(self) -> None:
+        for sound in self._sounds.values():
+            sound.set_volume(self.volume)
+
+    def change_volume(self, delta: float) -> float:
+        """Adjust the effect volume, clamped to 0..1, and return it."""
+        self.volume = max(0.0, min(1.0, round(self.volume + delta, 2)))
+        self._apply_volume()
+        return self.volume
 
     def toggle(self) -> bool:
         """Toggle muting and return the new enabled state."""
@@ -160,14 +181,26 @@ def _handle_key(
 
     if key == pygame.K_p:
         game.toggle_pause()
-    elif key in RESTART_KEYS and game.state is GameState.GAME_OVER:
-        game.restart()
+    elif key == pygame.K_r:
+        if game.state is GameState.GAME_OVER:
+            game.restart()
+        elif game.state in (GameState.PLAYING, GameState.PAUSED):
+            game.restart_run()
+    elif key in RESTART_KEYS:
+        if game.state is GameState.GAME_OVER:
+            game.restart()
+        elif game.state is GameState.START:
+            game.start()
     elif key in DIFFICULTY_KEYS and game.state is GameState.START:
         game.set_difficulty(DIFFICULTY_KEYS[key])
     elif key == pygame.K_g:
         renderer.grid_visible = not renderer.grid_visible
     elif key == pygame.K_m:
         sound.toggle()
+    elif key in VOLUME_DOWN_KEYS:
+        sound.change_volume(-VOLUME_STEP)
+    elif key in VOLUME_UP_KEYS:
+        sound.change_volume(VOLUME_STEP)
     return True
 
 
@@ -184,6 +217,24 @@ def _advance_game(game: Game, dt: float, accumulator: float) -> float:
     return accumulator
 
 
+def _open_window(config: GameConfig, fullscreen: bool) -> pygame.Surface:
+    """Create the display surface, either windowed or fullscreen."""
+    if fullscreen:
+        return pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    return pygame.display.set_mode((config.width, config.height), pygame.RESIZABLE)
+
+
+def _present(screen: pygame.Surface, canvas: pygame.Surface) -> None:
+    """Scale *canvas* into *screen*, keeping the aspect ratio and centring it."""
+    window_size = screen.get_size()
+    rect = fit_rect(window_size, canvas.get_size())
+    if rect.size == canvas.get_size():
+        screen.blit(canvas, rect)
+        return
+    screen.fill(COLORS["bg"])
+    screen.blit(pygame.transform.smoothscale(canvas, rect.size), rect)
+
+
 def run_game(
     config: GameConfig | None = None,
     max_frames: int | None = None,
@@ -195,9 +246,10 @@ def run_game(
     """
     config = config or GameConfig()
     pygame.mixer.pre_init(frequency=44100, size=-16, channels=1, buffer=512)
+    fullscreen = config.fullscreen
     try:
         pygame.init()
-        screen = pygame.display.set_mode((config.width, config.height))
+        screen = _open_window(config, fullscreen)
     except pygame.error as exc:
         pygame.quit()
         raise SystemExit(
@@ -206,12 +258,17 @@ def run_game(
             "SDL_VIDEODRIVER=dummy for automated tests."
         ) from exc
 
+    mode = "wrap" if config.wrap else "classic"
     pygame.display.set_caption(
         f"pySnake - {config.difficulty_preset.label.title()} "
-        f"({config.cols}x{config.rows})"
+        f"({config.cols}x{config.rows}, {mode})"
     )
     game = Game(config)
-    renderer = Renderer(screen, config)
+    # The game always renders at its logical size; the window scales that
+    # surface with a preserved aspect ratio, so resizing stays crisp and the
+    # HUD layout never has to change.
+    canvas = pygame.Surface((config.width, config.height))
+    renderer = Renderer(canvas, config)
     sound = SoundBank(config.sound)
     clock = pygame.time.Clock()
 
@@ -227,9 +284,15 @@ def run_game(
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    fullscreen = not fullscreen
+                    screen = _open_window(config, fullscreen)
                 elif event.type == pygame.KEYDOWN:
                     if not _handle_key(event.key, game, renderer, sound):
                         running = False
+                elif event.type == pygame.VIDEORESIZE and not fullscreen:
+                    size = (max(320, event.w), max(240, event.h))
+                    screen = pygame.display.set_mode(size, pygame.RESIZABLE)
                 elif (
                     focus_lost_event is not None
                     and event.type == focus_lost_event
@@ -248,7 +311,12 @@ def run_game(
             renderer.handle_events(events)
             sound.handle_events(events)
             renderer.update(dt)
-            renderer.draw(game, sound_enabled=sound.enabled)
+            renderer.draw(
+                game,
+                sound_enabled=sound.enabled,
+                volume=sound.volume,
+            )
+            _present(screen, canvas)
             pygame.display.flip()
 
             frames += 1

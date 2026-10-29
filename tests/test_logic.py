@@ -219,6 +219,48 @@ def test_input_spam_never_creates_self_overlap():
 
 
 # ---------------------------------------------------------------------------
+# Wrap-around mode
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_mode_crosses_the_side_walls():
+    config = GameConfig(cols=12, rows=12, wrap=True)
+    snake = Snake(config)
+    place_snake(snake, [(0, 5), (1, 5), (2, 5)], (-1, 0))
+    assert snake.move() is True
+    assert snake.head == (11, 5)
+
+    place_snake(snake, [(11, 5), (10, 5), (9, 5)], (1, 0))
+    assert snake.move() is True
+    assert snake.head == (0, 5)
+
+
+def test_wrap_mode_crosses_the_top_and_bottom_walls():
+    config = GameConfig(cols=12, rows=12, wrap=True)
+    snake = Snake(config)
+    place_snake(snake, [(5, 0), (5, 1), (5, 2)], (0, -1))
+    assert snake.move() is True
+    assert snake.head == (5, 11)
+
+    place_snake(snake, [(5, 11), (5, 10), (5, 9)], (0, 1))
+    assert snake.move() is True
+    assert snake.head == (5, 0)
+
+
+def test_wrap_mode_still_detects_self_collisions():
+    config = GameConfig(cols=12, rows=12, wrap=True)
+    snake = Snake(config)
+    place_snake(snake, [(0, 5), (11, 5), (10, 5)], (-1, 0))
+    assert snake.move() is False
+
+
+def test_wrap_is_opt_in():
+    snake = Snake(GameConfig(cols=12, rows=12))
+    place_snake(snake, [(0, 5), (1, 5), (2, 5)], (-1, 0))
+    assert snake.move() is False
+
+
+# ---------------------------------------------------------------------------
 # Food and free-cell helpers
 # ---------------------------------------------------------------------------
 
@@ -480,6 +522,7 @@ def test_game_over_saves_high_score_and_statistics(tmp_path):
     assert stats.last_score == 30
     assert stats.games_played == 1
     assert stats.best_length == 3
+    assert stats.top_scores == [30]
     kinds = [event.kind for event in game.drain_events()]
     assert EventKind.NEW_HIGH_SCORE in kinds
     assert EventKind.GAME_OVER in kinds
@@ -544,6 +587,39 @@ def test_restart_is_rejected_while_playing(tmp_path):
     assert game.state is GameState.PLAYING
 
 
+def test_restart_run_abandons_the_current_run_and_keeps_playing(tmp_path):
+    game = Game(make_config(tmp_path))
+    game.start()
+    game.score = 40
+    game.foods_eaten = 3
+    assert game.restart_run() is True
+    assert game.state is GameState.PLAYING
+    assert game.score == 0
+    assert game.foods_eaten == 0
+    assert len(game.snake.body) == game.config.start_length
+
+
+def test_restart_run_records_the_abandoned_score(tmp_path):
+    config = make_config(tmp_path)
+    game = Game(config)
+    game.start()
+    game.score = 60
+    assert game.restart_run() is True
+    stats = load_stats(config.data_file)
+    assert stats.high_score == 60
+    assert stats.top_scores == [60]
+    assert stats.games_played == 0
+
+
+def test_restart_run_is_rejected_outside_a_live_run(tmp_path):
+    game = Game(make_config(tmp_path))
+    assert game.restart_run() is False
+    game.start()
+    game.toggle_pause()
+    assert game.restart_run() is True
+    assert game.state is GameState.PLAYING
+
+
 def test_abandon_persists_a_better_score_without_counting_a_game(tmp_path):
     config = make_config(tmp_path)
     game = Game(config)
@@ -552,6 +628,7 @@ def test_abandon_persists_a_better_score_without_counting_a_game(tmp_path):
     game.abandon()
     stats = load_stats(config.data_file)
     assert stats.high_score == 70
+    assert stats.top_scores == [70]
     assert stats.games_played == 0
 
 

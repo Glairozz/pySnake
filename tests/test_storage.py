@@ -6,6 +6,7 @@ import json
 
 from pysnake.storage import (
     MAX_SAVED_VALUE,
+    TOP_SCORES_LIMIT,
     Stats,
     load_high_score,
     load_stats,
@@ -151,3 +152,92 @@ def test_pathlike_and_string_paths_both_work(tmp_path):
     path = tmp_path / "scores.json"
     assert save_stats(Stats(high_score=1), str(path)) is True
     assert load_stats(path).high_score == 1
+
+
+# ---------------------------------------------------------------------------
+# Leaderboard
+# ---------------------------------------------------------------------------
+
+
+def test_leaderboard_roundtrip(tmp_path):
+    path = tmp_path / "scores.json"
+    original = Stats(high_score=120, top_scores=[120, 90, 60])
+    assert save_stats(original, path) is True
+    assert load_stats(path) == original
+
+
+def test_top_scores_are_sorted_trimmed_and_sanitised(tmp_path):
+    path = tmp_path / "scores.json"
+    path.write_text(
+        json.dumps(
+            {
+                "top_scores": [
+                    10,
+                    "bad",
+                    -5,
+                    True,
+                    50,
+                    None,
+                    20,
+                    40,
+                    30,
+                    60,
+                    100,
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_stats(path).top_scores == [100, 60, 50, 40, 30]
+
+
+def test_non_list_top_scores_fall_back_to_empty(tmp_path):
+    path = tmp_path / "scores.json"
+    for bad_value in ("100,90", 42, {"a": 1}, None):
+        path.write_text(
+            json.dumps({"top_scores": bad_value}),
+            encoding="utf-8",
+        )
+        assert load_stats(path).top_scores == []
+
+
+def test_add_score_updates_the_high_score_and_leaderboard():
+    stats = Stats(high_score=80, top_scores=[80, 50])
+    assert stats.add_score(120) is True
+    assert stats.high_score == 120
+    assert stats.top_scores == [120, 80, 50]
+
+    assert stats.add_score(70) is False
+    assert stats.top_scores == [120, 80, 70, 50]
+    assert stats.high_score == 120
+
+
+def test_add_score_ignores_zero_and_negative_values():
+    stats = Stats()
+    assert stats.add_score(0) is False
+    assert stats.add_score(-10) is False
+    assert stats.top_scores == []
+    assert stats.high_score == 0
+
+
+def test_add_score_keeps_only_the_best_scores():
+    stats = Stats()
+    for score in range(10, 110, 10):
+        stats.add_score(score)
+    assert len(stats.top_scores) == TOP_SCORES_LIMIT
+    assert stats.top_scores == [100, 90, 80, 70, 60]
+    assert stats.high_score == 100
+
+
+def test_leaderboard_helper_respects_its_limit():
+    stats = Stats(top_scores=[100, 90, 80, 70, 60])
+    assert stats.leaderboard(3) == [100, 90, 80]
+    assert stats.leaderboard(0) == []
+    assert stats.leaderboard() == [100, 90, 80, 70, 60]
+
+
+def test_leaderboard_is_written_to_the_score_file(tmp_path):
+    path = tmp_path / "scores.json"
+    save_stats(Stats(high_score=30, top_scores=[30, 20]), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["top_scores"] == [30, 20]

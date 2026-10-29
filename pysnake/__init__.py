@@ -22,11 +22,19 @@ from .logic import (
     GameState,
     Snake,
 )
-from .storage import Stats, load_high_score, load_stats, save_high_score, save_stats
+from .storage import (
+    TOP_SCORES_LIMIT,
+    Stats,
+    load_high_score,
+    load_stats,
+    save_high_score,
+    save_stats,
+)
 
 __all__ = [
     "DIFFICULTIES",
     "DIFFICULTY_KEYS",
+    "TOP_SCORES_LIMIT",
     "BonusFood",
     "Difficulty",
     "EventKind",
@@ -44,4 +52,4 @@ __all__ = [
     "speed_for_score",
 ]
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"

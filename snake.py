@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python snake.py\n"
             "  python snake.py --difficulty hard --seed 42\n"
             "  python snake.py --cols 30 --rows 20 --cell-size 22\n"
+            "  python snake.py --wrap --fullscreen\n"
             "  python snake.py --data-file scores/highscore.json --no-grid\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -46,13 +47,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--cols",
         type=int,
         default=DEFAULT_COLS,
-        help=f"board width in cells ({MIN_BOARD_SIZE}-{MAX_BOARD_SIZE}, default: %(default)s)",
+        help=(
+            f"board width in cells ({MIN_BOARD_SIZE}-{MAX_BOARD_SIZE}, "
+            "default: %(default)s)"
+        ),
     )
     parser.add_argument(
         "--rows",
         type=int,
         default=DEFAULT_ROWS,
-        help=f"board height in cells ({MIN_BOARD_SIZE}-{MAX_BOARD_SIZE}, default: %(default)s)",
+        help=(
+            f"board height in cells ({MIN_BOARD_SIZE}-{MAX_BOARD_SIZE}, "
+            "default: %(default)s)"
+        ),
     )
     parser.add_argument(
         "--cell-size",
@@ -89,6 +96,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="disable the temporary golden bonus food",
     )
     parser.add_argument(
+        "--wrap",
+        action="store_true",
+        help="wrap around the edges instead of hitting solid walls",
+    )
+    parser.add_argument(
+        "--fullscreen",
+        action="store_true",
+        help="start in fullscreen (toggle in-game with F11)",
+    )
+    parser.add_argument(
         "--mute",
         action="store_true",
         help="start with sound effects muted (toggle in-game with M)",
@@ -113,6 +130,8 @@ def config_from_args(args: argparse.Namespace) -> GameConfig:
         sound=not args.mute,
         bonus_food=not args.no_bonus,
         data_file=args.data_file,
+        wrap=args.wrap,
+        fullscreen=args.fullscreen,
     )
 
 
