@@ -8,7 +8,13 @@ from dataclasses import dataclass
 
 import pygame
 
-from .config import COLORS, DIFFICULTIES, DIFFICULTY_KEYS, GameConfig
+from .config import (
+    ACHIEVEMENTS,
+    COLORS,
+    DIFFICULTIES,
+    DIFFICULTY_KEYS,
+    GameConfig,
+)
 from .logic import BonusFood, EventKind, Food, Game, GameEvent, GameState, Snake
 
 
@@ -116,6 +122,41 @@ class ParticleSystem:
         self.particles.clear()
 
 
+@dataclass
+class FloatingText:
+    """A short-lived score popup that rises from an eaten cell."""
+
+    text: str
+    x: float
+    y: float
+    color: tuple[int, int, int]
+    life: float = 1.0
+    rise: float = 44.0
+
+    def update(self, dt: float) -> bool:
+        self.y -= self.rise * dt
+        self.life -= dt
+        return self.life > 0.0
+
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
+        fade = max(0.0, min(1.0, self.life))
+        image = font.render(self.text, True, self.color)
+        image.set_alpha(int(255 * fade))
+        surface.blit(image, image.get_rect(center=(int(self.x), int(self.y))))
+
+
+@dataclass
+class Toast:
+    """A temporary notification, used for unlocked achievements."""
+
+    text: str
+    life: float = 3.0
+
+    def update(self, dt: float) -> bool:
+        self.life -= dt
+        return self.life > 0.0
+
+
 # ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------
@@ -129,6 +170,8 @@ class Renderer:
         self.config = config
         self.grid_visible = config.show_grid
         self.particles = ParticleSystem(config)
+        self.floating_text: list[FloatingText] = []
+        self.toasts: list[Toast] = []
         self._overlays: dict[int, pygame.Surface] = {}
         self._create_fonts()
 
@@ -144,14 +187,21 @@ class Renderer:
         self.small_font = pygame.font.Font(None, max(11, min(20, int(width * 0.026))))
 
     def handle_events(self, events: list[GameEvent]) -> None:
-        """Turn gameplay events into particles."""
+        """Turn gameplay events into particles, score popups and toasts."""
         for event in events:
+            if event.kind is EventKind.ACHIEVEMENT:
+                achievement = ACHIEVEMENTS.get(event.text or "")
+                if achievement is not None:
+                    self._add_toast(f"Achievement: {achievement.label}")
+                continue
             if event.position is None:
                 continue
             if event.kind is EventKind.ATE_FOOD:
                 self.particles.burst(event.position, COLORS["food"], 12)
+                self._add_score_popup(event)
             elif event.kind is EventKind.ATE_BONUS:
                 self.particles.burst(event.position, COLORS["bonus"], 18)
+                self._add_score_popup(event)
             elif event.kind in {EventKind.GAME_OVER, EventKind.VICTORY}:
                 color = (
                     COLORS["warning"]
@@ -160,8 +210,25 @@ class Renderer:
                 )
                 self.particles.burst(event.position, color, 10)
 
+    def _add_score_popup(self, event: GameEvent) -> None:
+        if event.position is None or event.value <= 0:
+            return
+        color = COLORS["accent"] if event.combo >= 2 else COLORS["snake_head"]
+        text = f"+{event.value}"
+        if event.combo >= 2:
+            text += f" x{event.combo}"
+        x, y = self.config.cell_center(*event.position)
+        self.floating_text.append(FloatingText(text, x, y, color))
+        del self.floating_text[:-24]
+
+    def _add_toast(self, text: str) -> None:
+        self.toasts.append(Toast(text))
+        del self.toasts[:-3]
+
     def update(self, dt: float) -> None:
         self.particles.update(dt)
+        self.floating_text = [popup for popup in self.floating_text if popup.update(dt)]
+        self.toasts = [toast for toast in self.toasts if toast.update(dt)]
 
     # -- text helpers -------------------------------------------------------
 
@@ -229,7 +296,10 @@ class Renderer:
             self._draw_bonus(game.bonus)
         self._draw_snake(game.snake)
         self.particles.draw(self.surface)
+        self._draw_floating_text()
         self._draw_header(game)
+        self._draw_speed_progress(game)
+        self._draw_combo_meter(game)
 
         if game.state is GameState.START:
             self._draw_start_screen(game, sound_enabled, volume)
@@ -237,6 +307,8 @@ class Renderer:
             self._draw_pause_screen(game, sound_enabled, volume)
         elif game.state is GameState.GAME_OVER:
             self._draw_game_over_screen(game)
+
+        self._draw_toasts()
 
     def _leaderboard_line(self, game: Game) -> str | None:
         """Describe the persisted top scores, or None when there are none."""
@@ -482,6 +554,94 @@ class Renderer:
             max_width=config.width // 3,
         )
 
+    def _draw_floating_text(self) -> None:
+        for popup in self.floating_text:
+            popup.draw(self.surface, self.body_font)
+
+    def _draw_speed_progress(self, game: Game) -> None:
+        """A slim bar showing progress towards the next speed-up."""
+        height = max(2, self.config.header_height // 20)
+        y = self.config.header_height - height
+        pygame.draw.rect(
+            self.surface,
+            COLORS["panel"],
+            (0, y, self.config.width, height),
+        )
+        fill = int(self.config.width * max(0.0, min(1.0, game.speed_progress)))
+        if fill > 0:
+            pygame.draw.rect(
+                self.surface,
+                COLORS["accent"],
+                (0, y, fill, height),
+            )
+
+    def _draw_combo_meter(self, game: Game) -> None:
+        """Show the active combo and its remaining window."""
+        if game.combo < 2:
+            return
+        text = f"COMBO x{game.combo_multiplier}"
+        image = self.small_font.render(text, True, COLORS["accent"])
+        shadow = self.small_font.render(text, True, COLORS["bg"])
+        top = self.config.board_top + max(4, self.config.cell_size // 6)
+        rect = image.get_rect(midtop=(self.config.width // 2, top))
+        self.surface.blit(
+            shadow,
+            shadow.get_rect(center=(rect.centerx + 1, rect.centery + 1)),
+        )
+        self.surface.blit(image, rect)
+
+        ratio = min(
+            1.0,
+            game.combo_ticks_left / max(1, self.config.combo_window),
+        )
+        bar_width = max(60, min(160, self.config.width // 3))
+        bar_height = max(2, self.config.cell_size // 10)
+        bar_x = (self.config.width - bar_width) // 2
+        bar_y = rect.bottom + 3
+        pygame.draw.rect(
+            self.surface,
+            COLORS["panel"],
+            (bar_x, bar_y, bar_width, bar_height),
+            border_radius=bar_height,
+        )
+        pygame.draw.rect(
+            self.surface,
+            COLORS["accent"],
+            (bar_x, bar_y, int(bar_width * ratio), bar_height),
+            border_radius=bar_height,
+        )
+
+    def _draw_toasts(self) -> None:
+        if not self.toasts:
+            return
+        gap = 6
+        bottom = self.config.height - max(18, self.small_font.get_height())
+        for toast in reversed(self.toasts):
+            fade = max(0.0, min(1.0, toast.life / 0.5))
+            image = self.body_font.render(toast.text, True, COLORS["text"])
+            image.set_alpha(int(255 * fade))
+            panel = pygame.Surface(
+                (image.get_width() + 20, image.get_height() + 12),
+                pygame.SRCALPHA,
+            )
+            panel.fill((8, 8, 16, int(215 * fade)))
+            pygame.draw.rect(
+                panel,
+                (*COLORS["accent"], int(220 * fade)),
+                panel.get_rect(),
+                width=1,
+                border_radius=6,
+            )
+            rect = panel.get_rect(
+                midbottom=(self.config.width // 2, bottom),
+            )
+            self.surface.blit(panel, rect)
+            self.surface.blit(
+                image,
+                image.get_rect(center=(rect.centerx, rect.centery)),
+            )
+            bottom = rect.top - gap
+
     # -- start screen -------------------------------------------------------
 
     def _draw_start_screen(
@@ -549,6 +709,9 @@ class Renderer:
             best_line += (
                 f"    Last {game.stats.last_score}    Games {game.stats.games_played}"
             )
+        best_line += (
+            f"    Achievements {len(game.stats.achievements)}/{len(ACHIEVEMENTS)}"
+        )
         self._text(
             best_line,
             self.body_font,
@@ -582,7 +745,7 @@ class Renderer:
         )
         y += small_h + gaps[4]
 
-        footer = "Food +10"
+        footer = f"Food +10   Combo up to x{config.combo_multiplier_cap}"
         if config.bonus_food:
             footer += f"   Golden food +{config.bonus_points}"
         if config.wrap:
@@ -744,6 +907,9 @@ class Renderer:
             details += f"    Games {game.stats.games_played}"
         if game.stats.best_length:
             details += f"    Longest {game.stats.best_length}"
+        details += (
+            f"    Achievements {len(game.stats.achievements)}/{len(ACHIEVEMENTS)}"
+        )
         self._text(
             details,
             self.small_font,

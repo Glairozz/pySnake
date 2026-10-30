@@ -75,6 +75,7 @@ class SoundBank:
         EventKind.PAUSED: (520.0, 0.05, 0.16),
         EventKind.RESUMED: (620.0, 0.05, 0.16),
         EventKind.NEW_HIGH_SCORE: (1046.0, 0.18, 0.24),
+        EventKind.ACHIEVEMENT: (1568.0, 0.16, 0.22),
         EventKind.GAME_OVER: (190.0, 0.30, 0.24),
         EventKind.VICTORY: (990.0, 0.25, 0.24),
     }

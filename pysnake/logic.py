@@ -15,8 +15,13 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 from .config import (
+    ACHIEVEMENT_KEYS,
+    BONUS_HUNTER_COUNT,
+    CENTURY_SCORE,
     DIFFICULTIES,
+    LONG_BODY_LENGTH,
     MAX_QUEUED_TURNS,
+    SURVIVOR_MOVES,
     Difficulty,
     GameConfig,
     speed_for_score,
@@ -53,16 +58,25 @@ class EventKind(Enum):
     PAUSED = auto()
     RESUMED = auto()
     NEW_HIGH_SCORE = auto()
+    ACHIEVEMENT = auto()
     GAME_OVER = auto()
     VICTORY = auto()
 
 
 @dataclass(frozen=True)
 class GameEvent:
-    """A small, immutable notification emitted by :class:`Game`."""
+    """A small, immutable notification emitted by :class:`Game`.
+
+    ``value`` and ``combo`` describe the points awarded by a food event;
+    ``text`` carries an achievement key.  Both are ignored by event kinds
+    that do not need them.
+    """
 
     kind: EventKind
     position: Cell | None = None
+    value: int = 0
+    combo: int = 0
+    text: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +122,7 @@ class Snake:
         self.direction: Direction = (0, -1)
         self._pending: deque[Direction] = deque()
         self.grow = False
+        self.wrapped_last_move = False
         self.reset()
 
     def reset(self) -> None:
@@ -121,6 +136,7 @@ class Snake:
         self.direction = (0, -1)
         self._pending.clear()
         self.grow = False
+        self.wrapped_last_move = False
 
     @property
     def head(self) -> Cell:
@@ -168,7 +184,9 @@ class Snake:
         head_x, head_y = self.head
         x = head_x + self.direction[0]
         y = head_y + self.direction[1]
+        wrapped = False
         if self.wrap:
+            wrapped = not (0 <= x < self.cols and 0 <= y < self.rows)
             x %= self.cols
             y %= self.rows
         elif not (0 <= x < self.cols and 0 <= y < self.rows):
@@ -184,6 +202,7 @@ class Snake:
             self.grow = False
         else:
             self.body.pop()
+        self.wrapped_last_move = wrapped
         return True
 
 
@@ -249,6 +268,12 @@ class Game:
         self.state = GameState.START
         self.score = 0
         self.foods_eaten = 0
+        self.combo = 0
+        self.combo_ticks_left = 0
+        self.max_combo = 0
+        self.bonus_eaten = 0
+        self.moves = 0
+        self.wrapped_once = False
         self.is_new_high = False
         self.victory = False
         self._events: list[GameEvent] = []
@@ -264,6 +289,21 @@ class Game:
     def speed(self) -> int:
         """Current tick rate in moves per second."""
         return speed_for_score(self.difficulty, self.score)
+
+    @property
+    def combo_multiplier(self) -> int:
+        """The score multiplier earned by the current food combo."""
+        return min(self.combo, self.config.combo_multiplier_cap)
+
+    @property
+    def speed_progress(self) -> float:
+        """Progress (0..1) towards the next speed-up, or 1.0 at the cap."""
+        preset = self.difficulty
+        if self.speed >= preset.max_speed:
+            return 1.0
+        return (max(0, self.score) % preset.speed_step_score) / (
+            preset.speed_step_score
+        )
 
     # -- input --------------------------------------------------------------
 
@@ -361,6 +401,12 @@ class Game:
         self.bonus = None
         self.score = 0
         self.foods_eaten = 0
+        self.combo = 0
+        self.combo_ticks_left = 0
+        self.max_combo = 0
+        self.bonus_eaten = 0
+        self.moves = 0
+        self.wrapped_once = False
         self.is_new_high = False
         self.victory = False
         self._events.clear()
@@ -371,18 +417,27 @@ class Game:
         """Advance the game by one move (no-op outside of PLAYING)."""
         if self.state is not GameState.PLAYING:
             return
+
+        self._advance_combo()
         if not self.snake.move():
             self._end_game(victory=False)
             return
 
+        self.moves += 1
+        self.wrapped_once = self.wrapped_once or self.snake.wrapped_last_move
         head = self.snake.head
 
         if self.bonus is not None and head == self.bonus.position:
             bonus_position = self.bonus.position
             self.score += self.config.bonus_points
+            self.bonus_eaten += 1
             self.snake.grow = True
             self.bonus = None
-            self._emit(EventKind.ATE_BONUS, bonus_position)
+            self._emit(
+                EventKind.ATE_BONUS,
+                bonus_position,
+                value=self.config.bonus_points,
+            )
         elif self.bonus is not None:
             self.bonus.ticks_left -= 1
             if self.bonus.ticks_left <= 0:
@@ -393,12 +448,33 @@ class Game:
         if head == self.food.position:
             self._eat_food()
 
+        self._check_achievements()
+
+    def _advance_combo(self) -> None:
+        """Tick down the combo window, dropping the combo when it expires."""
+        if self.combo_ticks_left <= 0:
+            return
+        self.combo_ticks_left -= 1
+        if self.combo_ticks_left == 0:
+            self.combo = 0
+
     def _eat_food(self) -> None:
         position = self.food.position
+        self.combo += 1
+        self.combo_ticks_left = self.config.combo_window
+        self.max_combo = max(self.max_combo, self.combo)
+        multiplier = self.combo_multiplier
+        points = self.difficulty.points_per_food * multiplier
+
         self.snake.grow = True
-        self.score += self.difficulty.points_per_food
+        self.score += points
         self.foods_eaten += 1
-        self._emit(EventKind.ATE_FOOD, position)
+        self._emit(
+            EventKind.ATE_FOOD,
+            position,
+            value=points,
+            combo=multiplier,
+        )
 
         if not self.food.spawn(self.snake.body):
             # No free cell remains: the player has filled the whole board.
@@ -427,6 +503,30 @@ class Game:
         if cell is not None:
             self.bonus = BonusFood(cell, self.config.bonus_lifetime)
 
+    def _check_achievements(self, *, persist: bool = True) -> None:
+        """Unlock any achievements whose conditions are now met."""
+        conditions = {
+            "first_bite": self.foods_eaten >= 1,
+            "combo_master": self.max_combo >= self.config.combo_multiplier_cap,
+            "century": self.score >= CENTURY_SCORE,
+            "long_body": len(self.snake.body) >= LONG_BODY_LENGTH,
+            "bonus_hunter": self.bonus_eaten >= BONUS_HUNTER_COUNT,
+            "survivor": self.moves >= SURVIVOR_MOVES,
+            "wrap_walker": self.wrapped_once,
+            "victory": self.victory,
+        }
+        unlocked = False
+        for key in ACHIEVEMENT_KEYS:
+            if self.stats.has_achievement(key):
+                continue
+            if not conditions.get(key, False):
+                continue
+            if self.stats.unlock(key):
+                unlocked = True
+                self._emit(EventKind.ACHIEVEMENT, self.snake.head, text=key)
+        if unlocked and persist:
+            save_stats(self.stats, self.config.data_file)
+
     def _end_game(self, victory: bool) -> None:
         self.victory = victory
         self.state = GameState.GAME_OVER
@@ -440,6 +540,7 @@ class Game:
         )
         self.stats.best_length = max(self.stats.best_length, final_length)
         self.stats.add_score(self.score)
+        self._check_achievements(persist=False)
         save_stats(self.stats, self.config.data_file)
 
         if self.is_new_high:
@@ -462,8 +563,16 @@ class Game:
 
     # -- events -------------------------------------------------------------
 
-    def _emit(self, kind: EventKind, position: Cell | None = None) -> None:
-        self._events.append(GameEvent(kind, position))
+    def _emit(
+        self,
+        kind: EventKind,
+        position: Cell | None = None,
+        *,
+        value: int = 0,
+        combo: int = 0,
+        text: str | None = None,
+    ) -> None:
+        self._events.append(GameEvent(kind, position, value, combo, text))
 
     def drain_events(self) -> list[GameEvent]:
         """Return and clear all events accumulated since the last call."""

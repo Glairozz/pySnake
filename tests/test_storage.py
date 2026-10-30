@@ -241,3 +241,61 @@ def test_leaderboard_is_written_to_the_score_file(tmp_path):
     save_stats(Stats(high_score=30, top_scores=[30, 20]), path)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["top_scores"] == [30, 20]
+
+
+# ---------------------------------------------------------------------------
+# Achievements
+# ---------------------------------------------------------------------------
+
+
+def test_achievements_roundtrip(tmp_path):
+    path = tmp_path / "scores.json"
+    original = Stats(achievements=["first_bite", "century"])
+    assert save_stats(original, path) is True
+    assert load_stats(path) == original
+
+
+def test_unknown_and_duplicate_achievements_are_removed(tmp_path):
+    path = tmp_path / "scores.json"
+    path.write_text(
+        json.dumps(
+            {
+                "achievements": [
+                    "century",
+                    "not-a-real-achievement",
+                    "first_bite",
+                    "century",
+                    42,
+                    None,
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_stats(path).achievements == ["first_bite", "century"]
+
+
+def test_non_list_achievements_fall_back_to_empty(tmp_path):
+    path = tmp_path / "scores.json"
+    for bad_value in ("first_bite", 42, {"a": 1}, None):
+        path.write_text(
+            json.dumps({"achievements": bad_value}),
+            encoding="utf-8",
+        )
+        assert load_stats(path).achievements == []
+
+
+def test_unlock_only_adds_new_known_keys():
+    stats = Stats()
+    assert stats.unlock("first_bite") is True
+    assert stats.unlock("first_bite") is False
+    assert stats.unlock("not-a-real-achievement") is False
+    assert stats.has_achievement("first_bite") is True
+    assert stats.achievements == ["first_bite"]
+
+
+def test_achievements_are_written_to_the_score_file(tmp_path):
+    path = tmp_path / "scores.json"
+    save_stats(Stats(achievements=["first_bite"]), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["achievements"] == ["first_bite"]

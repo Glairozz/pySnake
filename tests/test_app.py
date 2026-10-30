@@ -10,7 +10,7 @@ import pytest
 import snake
 from pysnake.app import SoundBank, _handle_key, _present, run_game
 from pysnake.config import DIFFICULTIES, GameConfig
-from pysnake.logic import Game, GameState
+from pysnake.logic import EventKind, Game, GameEvent, GameState
 from pysnake.ui import Renderer, fit_rect
 
 
@@ -94,6 +94,31 @@ def test_volume_keys_adjust_the_sound_bank(tmp_path, monkeypatch):
     pygame.quit()
 
 
+def test_renderer_turns_events_into_score_popups_and_toasts(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    renderer.handle_events(
+        [
+            GameEvent(EventKind.ATE_FOOD, (1, 1), value=20, combo=2),
+            GameEvent(EventKind.ACHIEVEMENT, text="first_bite"),
+        ]
+    )
+
+    assert len(renderer.floating_text) == 1
+    assert renderer.floating_text[0].text == "+20 x2"
+    assert len(renderer.toasts) == 1
+    assert "First Bite" in renderer.toasts[0].text
+
+    game.start()
+    game.combo = 2
+    game.combo_ticks_left = 30
+    renderer.draw(game, sound_enabled=True, volume=0.7)
+
+    renderer.update(4.0)
+    assert renderer.floating_text == []
+    assert renderer.toasts == []
+    pygame.quit()
+
+
 def test_cli_arguments_build_a_valid_configuration():
     parser = snake.build_parser()
     args = parser.parse_args(
@@ -110,6 +135,10 @@ def test_cli_arguments_build_a_valid_configuration():
             "42",
             "--no-grid",
             "--no-bonus",
+            "--combo-window",
+            "30",
+            "--combo-cap",
+            "4",
             "--wrap",
             "--fullscreen",
             "--mute",
@@ -127,6 +156,8 @@ def test_cli_arguments_build_a_valid_configuration():
     assert config.seed == 42
     assert config.show_grid is False
     assert config.bonus_food is False
+    assert config.combo_window == 30
+    assert config.combo_multiplier_cap == 4
     assert config.wrap is True
     assert config.fullscreen is True
     assert config.sound is False
@@ -148,6 +179,7 @@ def test_cli_help_works_without_opening_a_window(capsys):
     assert "pure-Python Snake game" in output
     assert "--difficulty" in output
     assert "--seed" in output
+    assert "--combo-window" in output
     assert "--wrap" in output
     assert "--fullscreen" in output
 

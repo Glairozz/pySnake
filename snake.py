@@ -96,6 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="disable the temporary golden bonus food",
     )
     parser.add_argument(
+        "--combo-window",
+        type=int,
+        default=60,
+        help="moves allowed between foods to keep a combo (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--combo-cap",
+        type=int,
+        default=3,
+        help="maximum combo score multiplier (default: %(default)s)",
+    )
+    parser.add_argument(
         "--wrap",
         action="store_true",
         help="wrap around the edges instead of hitting solid walls",
@@ -132,6 +144,8 @@ def config_from_args(args: argparse.Namespace) -> GameConfig:
         data_file=args.data_file,
         wrap=args.wrap,
         fullscreen=args.fullscreen,
+        combo_window=args.combo_window,
+        combo_multiplier_cap=args.combo_cap,
     )
 
 

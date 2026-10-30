@@ -14,6 +14,7 @@ from pysnake.config import (
 )
 from pysnake.logic import (
     DIRECTIONS,
+    BonusFood,
     EventKind,
     Food,
     Game,
@@ -322,8 +323,15 @@ def test_eating_regular_food_updates_score_and_emits_event(tmp_path):
     assert game.snake.grow is True
     assert game.food.position not in game.snake.body
     events = game.drain_events()
-    assert [event.kind for event in events] == [EventKind.ATE_FOOD]
-    assert events[0].position == (head_x, head_y - 1)
+    assert [event.kind for event in events] == [
+        EventKind.ATE_FOOD,
+        EventKind.ACHIEVEMENT,
+    ]
+    food_event = events[0]
+    assert food_event.position == (head_x, head_y - 1)
+    assert food_event.value == game.difficulty.points_per_food
+    assert food_event.combo == 1
+    assert events[1].text == "first_bite"
 
 
 def test_eating_grows_the_snake_on_the_following_move(tmp_path):
@@ -411,6 +419,165 @@ def test_drain_events_clears_the_queue(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Combos
+# ---------------------------------------------------------------------------
+
+
+def _eat_ahead(game: Game) -> None:
+    head_x, head_y = game.snake.head
+    game.food.position = (head_x, head_y - 1)
+    game.tick()
+
+
+def test_combo_scoring_escalates_and_caps(tmp_path):
+    config = make_config(tmp_path, combo_window=10, combo_multiplier_cap=3)
+    game = Game(config)
+    game.start()
+    game.drain_events()
+
+    scores = []
+    for _ in range(4):
+        _eat_ahead(game)
+        scores.append(game.score)
+
+    assert scores == [10, 30, 60, 90]
+    assert game.combo == 4
+    assert game.max_combo == 4
+    assert game.combo_multiplier == 3
+
+
+def test_combo_expires_after_the_window(tmp_path):
+    config = make_config(tmp_path, combo_window=3)
+    game = Game(config)
+    game.start()
+    _eat_ahead(game)
+    assert game.combo == 1
+
+    game.food.position = (0, 0)
+    for _ in range(3):
+        game.tick()
+
+    assert game.combo == 0
+    assert game.combo_multiplier == 0
+
+
+def test_combo_resets_when_the_window_runs_out_before_the_next_food(tmp_path):
+    config = make_config(tmp_path, combo_window=2)
+    game = Game(config)
+    game.start()
+    _eat_ahead(game)
+    game.food.position = (0, 0)
+    game.tick()
+    game.tick()
+    assert game.combo == 0
+
+    _eat_ahead(game)
+    assert game.combo == 1
+    assert game.score == 20
+
+
+def test_bonus_food_does_not_break_a_combo(tmp_path):
+    config = make_config(tmp_path, bonus_every=1, combo_window=10)
+    game = Game(config)
+    game.start()
+    _eat_ahead(game)
+    assert game.bonus is not None
+    assert game.combo == 1
+
+    head_x, head_y = game.snake.head
+    game.food.position = (0, 0)
+    game.bonus.position = (head_x, head_y - 1)
+    game.tick()
+
+    assert game.combo == 1
+    assert game.bonus_eaten == 1
+
+
+def test_combo_event_reports_awarded_points_and_multiplier(tmp_path):
+    config = make_config(tmp_path, combo_window=10)
+    game = Game(config)
+    game.start()
+    _eat_ahead(game)
+    game.drain_events()
+    _eat_ahead(game)
+
+    food_event = next(
+        event for event in game.drain_events() if event.kind is EventKind.ATE_FOOD
+    )
+    assert food_event.value == 20
+    assert food_event.combo == 2
+
+
+# ---------------------------------------------------------------------------
+# Achievements
+# ---------------------------------------------------------------------------
+
+
+def test_first_food_unlocks_and_persists_an_achievement(tmp_path):
+    config = make_config(tmp_path)
+    game = Game(config)
+    game.start()
+    game.drain_events()
+    _eat_ahead(game)
+
+    assert "first_bite" in game.stats.achievements
+    assert "first_bite" in load_stats(config.data_file).achievements
+    kinds = [event.kind for event in game.drain_events()]
+    assert EventKind.ACHIEVEMENT in kinds
+
+
+def test_combo_master_unlocks_at_the_cap(tmp_path):
+    config = make_config(tmp_path, combo_window=10, combo_multiplier_cap=3)
+    game = Game(config)
+    game.start()
+    for _ in range(3):
+        _eat_ahead(game)
+
+    assert "combo_master" in game.stats.achievements
+
+
+def test_score_length_and_wrap_achievements(tmp_path):
+    config = make_config(tmp_path, wrap=True)
+    game = Game(config)
+    game.start()
+    game.score = 99
+    _eat_ahead(game)
+    assert "century" in game.stats.achievements
+
+    place_snake(
+        game.snake,
+        [(0, 0)] + [(x, 0) for x in range(1, 12)] + [(11, 1), (10, 1), (9, 1)],
+        (0, 1),
+    )
+    game.tick()
+    assert "long_body" in game.stats.achievements
+
+    place_snake(game.snake, [(0, 5), (1, 5), (2, 5)], (-1, 0))
+    game.tick()
+    assert "wrap_walker" in game.stats.achievements
+
+
+def test_survivor_achievement_unlocks_on_the_move_threshold(tmp_path):
+    game = Game(make_config(tmp_path))
+    game.start()
+    game.moves = 499
+    game.tick()
+    assert "survivor" in game.stats.achievements
+
+
+def test_bonus_hunter_achievement_needs_three_golden_foods(tmp_path):
+    game = Game(make_config(tmp_path, bonus_every=1, combo_window=10))
+    game.start()
+    game.bonus_eaten = 2
+    head_x, head_y = game.snake.head
+    game.food.position = (0, 0)
+    game.bonus = BonusFood((head_x, head_y - 1), 10)
+    game.tick()
+    assert game.bonus_eaten == 3
+    assert "bonus_hunter" in game.stats.achievements
+
+
+# ---------------------------------------------------------------------------
 # State machine
 # ---------------------------------------------------------------------------
 
@@ -487,6 +654,20 @@ def test_speed_never_exceeds_the_preset_cap():
         assert speed_for_score(preset, 10_000_000) <= preset.max_speed
 
 
+def test_speed_progress_tracks_the_next_speed_up(tmp_path):
+    game = Game(make_config(tmp_path))
+    assert game.speed_progress == 0.0
+
+    game.score = 25
+    assert game.speed_progress == pytest.approx(0.5)
+
+    game.score = 50
+    assert game.speed_progress == 0.0
+
+    game.score = 10_000
+    assert game.speed_progress == 1.0
+
+
 def test_wall_hit_ends_the_game(tmp_path):
     game = Game(make_config(tmp_path))
     game.start()
@@ -554,9 +735,11 @@ def test_victory_when_the_board_fills_up(tmp_path, monkeypatch):
 
     assert game.state is GameState.GAME_OVER
     assert game.victory is True
+    assert "victory" in game.stats.achievements
     kinds = [event.kind for event in game.drain_events()]
     assert EventKind.VICTORY in kinds
     assert EventKind.ATE_FOOD in kinds
+    assert EventKind.ACHIEVEMENT in kinds
 
 
 def test_restart_resets_the_run_but_keeps_the_high_score(tmp_path):
@@ -658,6 +841,8 @@ def test_same_seed_produces_the_same_initial_food(tmp_path):
         {"start_length": 99},
         {"header_height": 4},
         {"bonus_every": 0},
+        {"combo_window": 0},
+        {"combo_multiplier_cap": 0},
     ],
 )
 def test_invalid_configuration_is_rejected(overrides):

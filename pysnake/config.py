@@ -102,6 +102,43 @@ def speed_for_score(difficulty: Difficulty, score: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Achievements
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Achievement:
+    """A small, persistent milestone the player can unlock."""
+
+    key: str
+    label: str
+    description: str
+
+
+ACHIEVEMENTS: dict[str, Achievement] = {
+    "first_bite": Achievement("first_bite", "First Bite", "Eat your first food"),
+    "combo_master": Achievement(
+        "combo_master", "Combo Master", "Reach the maximum combo multiplier"
+    ),
+    "century": Achievement("century", "Century", "Score 100 points"),
+    "long_body": Achievement("long_body", "Long Body", "Grow to 15 segments"),
+    "bonus_hunter": Achievement(
+        "bonus_hunter", "Bonus Hunter", "Eat three golden foods"
+    ),
+    "survivor": Achievement("survivor", "Survivor", "Survive 500 moves"),
+    "wrap_walker": Achievement("wrap_walker", "Wrap Walker", "Wrap around an edge"),
+    "victory": Achievement("victory", "Board Clearer", "Fill the entire board"),
+}
+ACHIEVEMENT_KEYS = tuple(ACHIEVEMENTS)
+
+#: Thresholds for the score, length, bonus and survival achievements.
+CENTURY_SCORE = 100
+LONG_BODY_LENGTH = 15
+BONUS_HUNTER_COUNT = 3
+SURVIVOR_MOVES = 500
+
+
+# ---------------------------------------------------------------------------
 # Game configuration
 # ---------------------------------------------------------------------------
 
@@ -132,6 +169,10 @@ class GameConfig:
     data_file: Path = field(default_factory=lambda: DEFAULT_DATA_FILE)
     wrap: bool = False
     fullscreen: bool = False
+    #: How many moves a combo stays alive between regular foods.
+    combo_window: int = 60
+    #: The largest score multiplier a combo can reach.
+    combo_multiplier_cap: int = 3
 
     def __post_init__(self) -> None:
         """Normalise the data-file path and reject impossible settings."""
@@ -165,6 +206,8 @@ class GameConfig:
             )
         if self.bonus_every < 1 or self.bonus_lifetime < 1 or self.bonus_points < 0:
             raise ValueError("bonus-food settings must be positive")
+        if self.combo_window < 1 or self.combo_multiplier_cap < 1:
+            raise ValueError("combo settings must be positive")
 
     @property
     def width(self) -> int:

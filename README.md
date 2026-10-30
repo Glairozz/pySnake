@@ -2,9 +2,9 @@
 
 A polished Snake game written in pure Python with [pygame](https://www.pygame.org/).
 It keeps the classic rules, adds a proper start/pause/game-over flow, three
-difficulty levels, temporary bonus food, wrap-around edges, a persistent
-top-five leaderboard, generated sound effects and configurable board sizes —
-with no external art or audio assets.
+difficulty levels, combo multipliers, temporary bonus food, wrap-around edges,
+a persistent top-five leaderboard, unlockable achievements, generated sound
+effects and configurable board sizes — with no external art or audio assets.
 
 The game rules are completely independent of pygame and are covered by an
 automated test suite that runs headlessly on Linux, macOS and Windows.
@@ -19,6 +19,9 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
   cleared" victory state.
 - Three difficulty levels (Easy, Normal, Hard) that increase speed as the
   score grows.
+- Combo scoring: chain foods within a move window for up to 3× points, with a
+  live combo meter and floating score popups.
+- Eight persistent achievements, from the first bite to clearing the board.
 - Classic solid walls or an optional wrap-around board (`--wrap`) where the
   snake reappears on the opposite edge.
 - Food never spawns inside the snake. Wall and self-collision detection is
@@ -29,6 +32,7 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
   an atomically written JSON file.
 - Toggleable grid and sound effects with adjustable volume. Sounds are
   synthesised at runtime, so there are no audio files to download.
+- A slim HUD bar shows progress towards the next speed-up.
 - Resizable window with aspect-ratio-preserving letterboxing, plus a
   fullscreen toggle (`F11`).
 - Configurable board dimensions, cell size, difficulty, edge mode and random
@@ -92,11 +96,40 @@ Notes:
 
 | Item | Value |
 |------|-------|
-| Regular food | 10 points, grows the snake by one segment |
+| Regular food | 10 points × combo multiplier, grows the snake by one segment |
 | Golden bonus food | 30 points, appears every 5 regular foods, expires after 50 moves |
+| Combo | Up to 3× points for chaining foods within 60 moves |
 | High score | Saved after game over, restart or quitting mid-run |
 | Leaderboard | The best 5 scores persist between sessions |
+| Achievements | 8 milestones persist across every run |
 | Board cleared | Reaching every cell ends the run in victory |
+
+### Combos
+
+Eating a regular food starts a combo. Eat another regular food before the
+combo window (60 moves by default) expires and the multiplier rises from 1×
+to 2×, then 3× (the cap). The current combo and its remaining window are shown
+above the board, and each food awards a floating score popup. Golden bonus
+food always gives its flat 30 points and does not break or extend a combo.
+
+Use `--combo-window N` to make combos more or less forgiving, and
+`--combo-cap N` to change the maximum multiplier.
+
+### Achievements
+
+| Achievement | Requirement |
+|-------------|-------------|
+| First Bite | Eat your first food |
+| Combo Master | Reach the maximum combo multiplier (`--combo-cap`) |
+| Century | Score 100 points |
+| Long Body | Grow to 15 segments |
+| Bonus Hunter | Eat three golden foods |
+| Survivor | Survive 500 moves |
+| Wrap Walker | Wrap around an edge (`--wrap`) |
+| Board Clearer | Fill the entire board |
+
+Unlocks are saved immediately and announced with an in-game toast. The start
+and game-over screens show how many of the eight you have collected.
 
 ### Edge modes
 
@@ -137,6 +170,9 @@ python snake.py --no-bonus --mute
 
 # Play on a wrap-around board in fullscreen
 python snake.py --wrap --fullscreen
+
+# Make combos friendlier and cap the multiplier at 2x
+python snake.py --combo-window 100 --combo-cap 2
 ```
 
 | Option | Description |
@@ -149,6 +185,8 @@ python snake.py --wrap --fullscreen
 | `--data-file PATH` | High-score/statistics file (default `highscore.json` next to `snake.py`) |
 | `--no-grid` | Start with the grid hidden (toggle with `G`) |
 | `--no-bonus` | Disable golden bonus food |
+| `--combo-window N` | Moves allowed between foods to keep a combo (default 60) |
+| `--combo-cap N` | Maximum combo score multiplier (default 3) |
 | `--wrap` | Wrap around the edges instead of hitting solid walls |
 | `--fullscreen` | Start in fullscreen (toggle with `F11`) |
 | `--mute` | Start with sound muted (toggle with `M`) |
@@ -166,7 +204,8 @@ By default the game stores its data in `highscore.json` next to `snake.py`:
   "games_played": 12,
   "last_score": 80,
   "best_length": 18,
-  "top_scores": [240, 180, 120, 90, 80]
+  "top_scores": [240, 180, 120, 90, 80],
+  "achievements": ["first_bite", "combo_master", "century"]
 }
 ```
 
@@ -177,6 +216,8 @@ By default the game stores its data in `highscore.json` next to `snake.py`:
 - Scores are sanitised, sorted best-first and trimmed to the best five. A run
   that is abandoned with `R` still reaches the leaderboard, but it does not
   increment `games_played`.
+- Achievements are stored as stable keys. Unknown or duplicate entries are
+  discarded when the file is loaded, and unlocks are written immediately.
 - Older files containing only `{"high_score": 120}` are still supported.
 - Use `--data-file` if the game directory is read-only or you want separate
   score files for different configurations.
@@ -196,6 +237,8 @@ and the smoke tests select SDL's dummy video and audio drivers. They cover:
 - movement in every direction, turn buffering and rejected reversals
 - solid-wall and wrap-around edges, body collisions and the vacating-tail rule
 - food spawning, full boards, scoring, bonus food and expiry
+- combo scaling, expiry, bonus interaction and floating score events
+- achievement unlocking, persistence and sanitisation
 - all state transitions, restart, instant restart, victory and game over
 - high-score, leaderboard and statistics persistence, including corrupt files
 - window scaling, sound volume, configuration validation and pygame/CLI smoke

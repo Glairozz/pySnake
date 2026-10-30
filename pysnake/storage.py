@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import DEFAULT_DATA_FILE
+from .config import ACHIEVEMENT_KEYS, DEFAULT_DATA_FILE
 
 # Keep absurd values from a hand-edited file from producing silly displays.
 MAX_SAVED_VALUE = 1_000_000_000
@@ -62,6 +62,14 @@ def _score_list(value: Any, limit: int = TOP_SCORES_LIMIT) -> list[int]:
     return sorted(scores, reverse=True)[: max(0, limit)]
 
 
+def _achievement_list(value: Any) -> list[str]:
+    """Keep only known achievement keys, in their canonical order."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        return []
+    unlocked = {item for item in value if isinstance(item, str)}
+    return [key for key in ACHIEVEMENT_KEYS if key in unlocked]
+
+
 @dataclass
 class Stats:
     """Data persisted between sessions."""
@@ -71,6 +79,7 @@ class Stats:
     last_score: int = 0
     best_length: int = 0
     top_scores: list[int] = field(default_factory=list)
+    achievements: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation."""
@@ -80,6 +89,7 @@ class Stats:
             "last_score": _non_negative_int(self.last_score),
             "best_length": _non_negative_int(self.best_length),
             "top_scores": _score_list(self.top_scores),
+            "achievements": _achievement_list(self.achievements),
         }
 
     @classmethod
@@ -91,6 +101,7 @@ class Stats:
             last_score=_non_negative_int(data.get("last_score")),
             best_length=_non_negative_int(data.get("best_length")),
             top_scores=_score_list(data.get("top_scores")),
+            achievements=_achievement_list(data.get("achievements")),
         )
 
     def add_score(self, score: int) -> bool:
@@ -114,6 +125,18 @@ class Stats:
     def leaderboard(self, limit: int = TOP_SCORES_LIMIT) -> list[int]:
         """Return the best scores, newest-best first."""
         return self.top_scores[: max(0, limit)]
+
+    def has_achievement(self, key: str) -> bool:
+        """Return whether *key* has already been unlocked."""
+        return key in self.achievements
+
+    def unlock(self, key: str) -> bool:
+        """Unlock *key* once; return True when it was newly added."""
+        if key not in ACHIEVEMENT_KEYS or key in self.achievements:
+            return False
+        self.achievements.append(key)
+        self.achievements = _achievement_list(self.achievements)
+        return True
 
 
 def load_stats(path: str | os.PathLike[str] = DEFAULT_DATA_FILE) -> Stats:
