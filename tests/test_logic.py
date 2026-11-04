@@ -411,6 +411,56 @@ def test_bonus_food_can_be_disabled(tmp_path):
     assert game.bonus is None
 
 
+def test_food_spawning_avoids_the_golden_bonus_cell(tmp_path, monkeypatch):
+    config = make_config(tmp_path, bonus_every=99)
+    game = Game(config)
+    game.start()
+    bonus_cell = (5, 5)
+    game.bonus = BonusFood(bonus_cell, 10)
+
+    seen_occupied: set[tuple[int, int]] = set()
+
+    def fake_random_free_cell(cols, rows, occupied, rng):
+        seen_occupied.update(occupied)
+        return (0, 0)
+
+    monkeypatch.setattr("pysnake.logic.random_free_cell", fake_random_free_cell)
+    head_x, head_y = game.snake.head
+    game.food.position = (head_x, head_y - 1)
+    game.tick()
+
+    assert bonus_cell in seen_occupied
+    assert game.food.position != bonus_cell
+
+
+def test_bonus_is_replaced_when_no_other_cell_is_free(tmp_path, monkeypatch):
+    config = make_config(tmp_path, bonus_every=99)
+    game = Game(config)
+    game.start()
+    game.bonus = BonusFood((5, 5), 10)
+
+    calls = 0
+
+    def fake_spawn(occupied=()):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return False
+        game.food.position = (0, 0)
+        return True
+
+    monkeypatch.setattr(game.food, "spawn", fake_spawn)
+    game.drain_events()
+    head_x, head_y = game.snake.head
+    game.food.position = (head_x, head_y - 1)
+    game.tick()
+
+    assert game.state is GameState.PLAYING
+    assert game.bonus is None
+    kinds = [event.kind for event in game.drain_events()]
+    assert EventKind.BONUS_EXPIRED in kinds
+
+
 def test_drain_events_clears_the_queue(tmp_path):
     game = Game(make_config(tmp_path))
     game.start()
@@ -508,6 +558,36 @@ def test_combo_event_reports_awarded_points_and_multiplier(tmp_path):
     assert food_event.combo == 2
 
 
+def test_combo_survives_a_food_on_the_last_allowed_move(tmp_path):
+    config = make_config(tmp_path, combo_window=2)
+    game = Game(config)
+    game.start()
+    _eat_ahead(game)
+    assert game.combo == 1
+    assert game.combo_ticks_left == 2
+
+    # Burn one move without food, leaving exactly one move in the window.
+    game.food.position = (0, 0)
+    game.tick()
+    assert game.combo == 1
+    assert game.combo_ticks_left == 1
+
+    _eat_ahead(game)
+    assert game.combo == 2
+    assert game.score == 30
+
+
+def test_combo_window_of_one_allows_back_to_back_foods(tmp_path):
+    config = make_config(tmp_path, combo_window=1)
+    game = Game(config)
+    game.start()
+    _eat_ahead(game)
+    _eat_ahead(game)
+
+    assert game.combo == 2
+    assert game.score == 30
+
+
 # ---------------------------------------------------------------------------
 # Achievements
 # ---------------------------------------------------------------------------
@@ -575,6 +655,29 @@ def test_bonus_hunter_achievement_needs_three_golden_foods(tmp_path):
     game.tick()
     assert game.bonus_eaten == 3
     assert "bonus_hunter" in game.stats.achievements
+
+
+def test_speed_demon_unlocks_at_the_difficulty_speed_cap(tmp_path):
+    game = Game(make_config(tmp_path))
+    game.start()
+    game.score = game.difficulty.max_speed * game.difficulty.speed_step_score
+    game.tick()
+    assert game.speed == game.difficulty.max_speed
+    assert "speed_demon" in game.stats.achievements
+
+
+def test_veteran_unlocks_after_ten_finished_games(tmp_path):
+    config = make_config(tmp_path)
+    game = Game(config, stats=Stats(games_played=9))
+    game.start()
+    game.score = 10
+    place_snake(game.snake, [(0, 0), (1, 0), (2, 0)], (-1, 0))
+    game.tick()
+
+    assert game.state is GameState.GAME_OVER
+    assert game.stats.games_played == 10
+    assert "veteran" in game.stats.achievements
+    assert "veteran" in load_stats(config.data_file).achievements
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +918,32 @@ def test_abandon_persists_a_better_score_without_counting_a_game(tmp_path):
     assert stats.games_played == 0
 
 
+def test_abandon_keeps_length_and_combo_records(tmp_path):
+    config = make_config(tmp_path)
+    game = Game(config)
+    game.start()
+    game.snake.body = [(index, 0) for index in range(8)]
+    game.max_combo = config.combo_multiplier_cap
+    game.abandon()
+
+    stats = load_stats(config.data_file)
+    assert stats.best_length == 8
+    assert stats.best_combo == config.combo_multiplier_cap
+
+
+def test_finished_run_records_the_best_combo(tmp_path):
+    config = make_config(tmp_path)
+    game = Game(config)
+    game.start()
+    game.max_combo = 3
+    place_snake(game.snake, [(0, 0), (1, 0), (2, 0)], (-1, 0))
+    game.tick()
+
+    stats = load_stats(config.data_file)
+    assert stats.best_combo == 3
+    assert game.length >= 3
+
+
 def test_same_seed_produces_the_same_initial_food(tmp_path):
     config = make_config(tmp_path, seed=99)
     first = Game(config)
@@ -843,6 +972,8 @@ def test_same_seed_produces_the_same_initial_food(tmp_path):
         {"bonus_every": 0},
         {"combo_window": 0},
         {"combo_multiplier_cap": 0},
+        {"volume": -0.1},
+        {"volume": 1.1},
     ],
 )
 def test_invalid_configuration_is_rejected(overrides):

@@ -21,6 +21,8 @@ from pysnake.config import (
     DEFAULT_COLS,
     DEFAULT_DATA_FILE,
     DEFAULT_ROWS,
+    DEFAULT_START_LENGTH,
+    DEFAULT_VOLUME,
     MAX_BOARD_SIZE,
     MAX_CELL_SIZE,
     MIN_BOARD_SIZE,
@@ -96,6 +98,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="disable the temporary golden bonus food",
     )
     parser.add_argument(
+        "--bonus-every",
+        type=int,
+        default=5,
+        help="spawn golden food after this many regular foods (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--bonus-lifetime",
+        type=int,
+        default=50,
+        help="moves before golden food expires (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--bonus-points",
+        type=int,
+        default=30,
+        help="points awarded by golden food (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--start-length",
+        type=int,
+        default=DEFAULT_START_LENGTH,
+        help="initial snake length (default: %(default)s)",
+    )
+    parser.add_argument(
         "--combo-window",
         type=int,
         default=60,
@@ -123,6 +149,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="start with sound effects muted (toggle in-game with M)",
     )
     parser.add_argument(
+        "--volume",
+        type=float,
+        default=DEFAULT_VOLUME,
+        help="initial sound volume from 0.0 to 1.0 (default: %(default)s)",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"pySnake {__version__}",
@@ -141,6 +173,11 @@ def config_from_args(args: argparse.Namespace) -> GameConfig:
         show_grid=not args.no_grid,
         sound=not args.mute,
         bonus_food=not args.no_bonus,
+        bonus_every=args.bonus_every,
+        bonus_lifetime=args.bonus_lifetime,
+        bonus_points=args.bonus_points,
+        start_length=args.start_length,
+        volume=args.volume,
         data_file=args.data_file,
         wrap=args.wrap,
         fullscreen=args.fullscreen,

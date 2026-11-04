@@ -22,6 +22,7 @@ from .config import (
     LONG_BODY_LENGTH,
     MAX_QUEUED_TURNS,
     SURVIVOR_MOVES,
+    VETERAN_GAMES,
     Difficulty,
     GameConfig,
     speed_for_score,
@@ -286,6 +287,11 @@ class Game:
         return self.stats.high_score
 
     @property
+    def length(self) -> int:
+        """Current snake length in segments, including pending growth."""
+        return len(self.snake.body) + (1 if self.snake.grow else 0)
+
+    @property
     def speed(self) -> int:
         """Current tick rate in moves per second."""
         return speed_for_score(self.difficulty, self.score)
@@ -389,9 +395,27 @@ class Game:
         return True
 
     def _record_current_run(self) -> None:
-        """Persist the current score without counting an extra finished game."""
+        """Persist the current score without counting an extra finished game.
+
+        Record statistics such as the longest body and best combo are updated
+        too, so quitting or restarting mid-run never loses a personal best.
+        """
+        changed = False
         if self.score > 0:
             self.stats.add_score(self.score)
+            changed = True
+
+        best_length = self.length
+        if best_length > self.stats.best_length:
+            self.stats.best_length = best_length
+            changed = True
+
+        best_combo = min(self.max_combo, self.config.combo_multiplier_cap)
+        if best_combo > self.stats.best_combo:
+            self.stats.best_combo = best_combo
+            changed = True
+
+        if changed:
             save_stats(self.stats, self.config.data_file)
 
     def _reset_run(self) -> None:
@@ -418,7 +442,6 @@ class Game:
         if self.state is not GameState.PLAYING:
             return
 
-        self._advance_combo()
         if not self.snake.move():
             self._end_game(victory=False)
             return
@@ -447,6 +470,10 @@ class Game:
 
         if head == self.food.position:
             self._eat_food()
+        else:
+            # The combo window is measured in moves *between* foods, so a
+            # food eaten on the very last allowed move still keeps it alive.
+            self._advance_combo()
 
         self._check_achievements()
 
@@ -476,10 +503,22 @@ class Game:
             combo=multiplier,
         )
 
-        if not self.food.spawn(self.snake.body):
-            # No free cell remains: the player has filled the whole board.
-            self._end_game(victory=True)
-            return
+        occupied = set(self.snake.body)
+        if self.bonus is not None:
+            occupied.add(self.bonus.position)
+        if not self.food.spawn(occupied):
+            # The only cell left may be occupied by a golden pellet.  Replace
+            # the bonus rather than declaring a premature victory on a board
+            # the snake has not actually filled.
+            if self.bonus is None:
+                self._end_game(victory=True)
+                return
+            expired_at = self.bonus.position
+            self.bonus = None
+            self._emit(EventKind.BONUS_EXPIRED, expired_at)
+            if not self.food.spawn(self.snake.body):
+                self._end_game(victory=True)
+                return
 
         if self._bonus_due():
             self._spawn_bonus()
@@ -513,6 +552,8 @@ class Game:
             "bonus_hunter": self.bonus_eaten >= BONUS_HUNTER_COUNT,
             "survivor": self.moves >= SURVIVOR_MOVES,
             "wrap_walker": self.wrapped_once,
+            "speed_demon": self.speed >= self.difficulty.max_speed,
+            "veteran": self.stats.games_played >= VETERAN_GAMES,
             "victory": self.victory,
         }
         unlocked = False
@@ -535,10 +576,14 @@ class Game:
         self.stats.games_played += 1
         self.stats.last_score = self.score
         final_length = min(
-            len(self.snake.body) + (1 if self.snake.grow else 0),
+            self.length,
             self.config.cols * self.config.rows,
         )
         self.stats.best_length = max(self.stats.best_length, final_length)
+        self.stats.best_combo = max(
+            self.stats.best_combo,
+            min(self.max_combo, self.config.combo_multiplier_cap),
+        )
         self.stats.add_score(self.score)
         self._check_achievements(persist=False)
         save_stats(self.stats, self.config.data_file)

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Snake Game</title>
+    <title>pySnake - Browser Demo</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
@@ -31,6 +31,10 @@
             padding: 0;
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
+        }
+
+        .hidden {
+            display: none !important;
         }
 
         body {
@@ -191,6 +195,69 @@
             margin-bottom: 15px;
         }
 
+        .overlay-stats {
+            font-size: 12px;
+            color: var(--text-dim);
+            line-height: 1.8;
+            text-align: center;
+            margin-bottom: 10px;
+            white-space: pre-line;
+        }
+
+        .difficulty-selector {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 18px;
+        }
+
+        .difficulty-btn {
+            padding: 8px 14px;
+            background: rgba(20, 20, 34, 0.9);
+            border: 1px solid var(--grid-line);
+            border-radius: 8px;
+            color: var(--text-dim);
+            font-family: inherit;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .difficulty-btn:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        .difficulty-btn.active {
+            border-color: var(--snake-head);
+            color: var(--snake-head);
+            background: rgba(0, 255, 136, 0.12);
+            box-shadow: 0 0 18px rgba(0, 255, 136, 0.18);
+        }
+
+        .icon-btn {
+            width: 34px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(20, 20, 34, 0.9);
+            border: 1px solid var(--grid-line);
+            border-radius: 8px;
+            color: var(--text-dim);
+            font-family: inherit;
+            font-size: 12px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .icon-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; transform: scale(1); }
             50% { opacity: 0.6; transform: scale(1.02); }
@@ -303,6 +370,7 @@
                     <div class="score-value main" id="score">0</div>
                 </div>
             </div>
+            <button class="icon-btn" id="pauseBtn" type="button" title="Pause (P)" aria-label="Pause">II</button>
         </div>
         
         <div class="game-container">
@@ -310,26 +378,34 @@
             
             <div class="overlay" id="startOverlay">
                 <div class="overlay-title">SNAKE</div>
-                <div class="overlay-subtitle">Press any direction or tap to start</div>
+                <div class="overlay-subtitle">Press a direction, SPACE or tap to start</div>
+                <div class="difficulty-selector" id="difficultySelector">
+                    <button class="difficulty-btn" type="button" data-difficulty="easy">EASY</button>
+                    <button class="difficulty-btn active" type="button" data-difficulty="normal">NORMAL</button>
+                    <button class="difficulty-btn" type="button" data-difficulty="hard">HARD</button>
+                </div>
                 <div class="overlay-hint">ARROW KEYS or WASD to move</div>
             </div>
             
             <div class="overlay hidden" id="pauseOverlay">
                 <div class="overlay-paused">PAUSED</div>
-                <div class="overlay-hint">Press P to resume</div>
+                <div class="overlay-hint">Press P or tap here to resume</div>
+                <div class="overlay-stats" id="pauseStats"></div>
             </div>
             
             <div class="overlay hidden" id="gameOverOverlay">
                 <div class="overlay-title game-over" id="gameOverTitle">GAME OVER</div>
                 <div class="overlay-score">Score: <span id="finalScore">0</span></div>
                 <div class="overlay-new-high hidden" id="newHighScore">NEW HIGH SCORE!</div>
-                <div class="overlay-hint">Press SPACE or TAP to restart</div>
+                <div class="overlay-stats" id="finalStats"></div>
+                <div class="overlay-hint">Press SPACE, R or TAP to restart</div>
             </div>
         </div>
         
         <div class="controls-bar">
             <span><span class="control-key">↑↓←→</span> or <span class="control-key">WASD</span> move</span>
             <span><span class="control-key">P</span> pause</span>
+            <span><span class="control-key">R</span> restart</span>
         </div>
     </div>
 
@@ -358,26 +434,65 @@
             food: '#ff4466',
             foodGlow: '#ff6688',
             foodInner: '#ff8899',
+            bonus: '#ffd747',
+            bonusInner: '#fffbe0',
+            accent: '#00ccff',
         };
+        
+        const DIFFICULTY_PRESETS = {
+            easy: { label: 'EASY', startSpeed: 150, minSpeed: 75, speedDrop: 10, stepScore: 50 },
+            normal: { label: 'NORMAL', startSpeed: 130, minSpeed: 60, speedDrop: 15, stepScore: 50 },
+            hard: { label: 'HARD', startSpeed: 105, minSpeed: 45, speedDrop: 18, stepScore: 30 },
+        };
+        const DIFFICULTY_KEYS = Object.keys(DIFFICULTY_PRESETS);
+        const COMBO_CAP = 3;
+        const COMBO_WINDOW = 45;
+        const BONUS_EVERY = 5;
+        const BONUS_LIFETIME = 40;
+        const BONUS_POINTS = 30;
+
+        // localStorage can be unavailable (private browsing, sandboxed frames),
+        // so every access is guarded.
+        function readStorage(key, fallback) {
+            try {
+                const value = localStorage.getItem(key);
+                return value === null ? fallback : value;
+            } catch (error) {
+                return fallback;
+            }
+        }
+
+        function writeStorage(key, value) {
+            try {
+                localStorage.setItem(key, String(value));
+            } catch (error) {
+                // Ignore storage failures; the game still works in memory.
+            }
+        }
+
+        let difficultyKey = readStorage('snakeDifficulty', 'normal');
+        if (!DIFFICULTY_PRESETS[difficultyKey]) difficultyKey = 'normal';
+        let preset = DIFFICULTY_PRESETS[difficultyKey];
         
         let snake = [];
         let food = { x: 0, y: 0 };
+        let bonus = null;
         let direction = { x: 0, y: -1 };
         let nextDirection = { x: 0, y: -1 };
         let score = 0;
-        let highScore = parseInt(localStorage.getItem('snakeHighScore')) || 0;
-        let speed = 130;
+        let highScore = parseInt(readStorage('snakeHighScore', '0'), 10) || 0;
+        let speed = getSpeed(0);
         let gameLoop = null;
         let gameState = 'start';
         let particles = [];
-
-        // Progressive difficulty: one step slower every SPEED_STEP_SCORE
-        // points, never below MIN_SPEED.
-        const START_SPEED = 130;
-        const MIN_SPEED = 60;
-        const SPEED_DROP = 15;
-        const SPEED_STEP_SCORE = 50;
-
+        let floatingTexts = [];
+        let combo = 0;
+        let comboTicks = 0;
+        let maxCombo = 0;
+        let foodsEaten = 0;
+        let bonusEaten = 0;
+        let moves = 0;
+        
         // Keyboard direction keys (arrows + WASD).
         const DIRS = {
             'ArrowUp': [0, -1], 'w': [0, -1], 'W': [0, -1],
@@ -433,33 +548,71 @@
             direction = { x: 0, y: -1 };
             nextDirection = { x: 0, y: -1 };
             score = 0;
-            speed = START_SPEED;
+            speed = getSpeed(0);
             particles = [];
+            floatingTexts = [];
+            combo = 0;
+            comboTicks = 0;
+            maxCombo = 0;
+            foodsEaten = 0;
+            bonusEaten = 0;
+            moves = 0;
+            bonus = null;
             spawnFood();
             updateScoreDisplay();
         }
         
         function spawnFood() {
-            // Collect every free cell so the food never lands on the snake
-            // and so a completely filled board is detected instead of
-            // looping forever.
-            const free = [];
-            for (let x = 0; x < GRID_COUNT; x++) {
-                for (let y = 0; y < GRID_COUNT; y++) {
-                    if (!snake.some(seg => seg.x === x && seg.y === y)) {
-                        free.push({ x, y });
-                    }
-                }
+            // The food never lands on the snake or the golden bonus.  If the
+            // only free cell is the bonus, replace the bonus instead of
+            // declaring a premature victory.
+            let free = freeCellsForFood();
+            if (free.length === 0 && bonus !== null) {
+                bonus = null;
+                free = freeCellsForFood();
             }
             if (free.length === 0) {
                 gameOver(true); // board cleared — the player wins
                 return;
             }
             food = free[Math.floor(Math.random() * free.length)];
+            if (foodsEaten > 0 && foodsEaten % BONUS_EVERY === 0 && bonus === null) {
+                spawnBonus();
+            }
+        }
+
+        function freeCellsForFood() {
+            const free = [];
+            for (let x = 0; x < GRID_COUNT; x++) {
+                for (let y = 0; y < GRID_COUNT; y++) {
+                    if (snake.some(seg => seg.x === x && seg.y === y)) continue;
+                    if (bonus !== null && bonus.x === x && bonus.y === y) continue;
+                    free.push({ x, y });
+                }
+            }
+            return free;
+        }
+
+        function spawnBonus() {
+            const free = [];
+            for (let x = 0; x < GRID_COUNT; x++) {
+                for (let y = 0; y < GRID_COUNT; y++) {
+                    if (snake.some(seg => seg.x === x && seg.y === y)) continue;
+                    if (food.x === x && food.y === y) continue;
+                    free.push({ x, y });
+                }
+            }
+            if (free.length > 0) {
+                bonus = {
+                    ...free[Math.floor(Math.random() * free.length)],
+                    ticks: BONUS_LIFETIME,
+                };
+            }
         }
         
         function updateScoreDisplay() {
             document.getElementById('score').textContent = score;
+            document.getElementById('highScore').textContent = Math.max(highScore, score);
         }
         
         function drawGrid() {
@@ -558,6 +711,105 @@
             roundRect(ctx, x + 7, y + 7, GRID_SIZE - 14, GRID_SIZE - 14, 3);
             ctx.fill();
         }
+
+        function drawBonus() {
+            const centerX = bonus.x * GRID_SIZE + GRID_SIZE / 2;
+            const centerY = bonus.y * GRID_SIZE + GRID_SIZE / 2;
+            const pulse = Math.sin(Date.now() / 110) * 0.12 + 0.88;
+            const radius = GRID_SIZE * 0.30 * pulse;
+
+            ctx.fillStyle = `rgba(255, 215, 70, ${0.16 + pulse * 0.12})`;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius + 7, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = COLORS.bonus;
+            ctx.shadowColor = COLORS.bonus;
+            ctx.shadowBlur = 16;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - radius);
+            ctx.lineTo(centerX + radius, centerY);
+            ctx.lineTo(centerX, centerY + radius);
+            ctx.lineTo(centerX - radius, centerY);
+            ctx.closePath();
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            const inner = radius * 0.46;
+            ctx.fillStyle = COLORS.bonusInner;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - inner);
+            ctx.lineTo(centerX + inner, centerY);
+            ctx.lineTo(centerX, centerY + inner);
+            ctx.lineTo(centerX - inner, centerY);
+            ctx.closePath();
+            ctx.fill();
+
+            // A small bar shows how long the bonus will remain on the board.
+            const margin = 4;
+            const barHeight = 3;
+            const barWidth = GRID_SIZE - margin * 2;
+            const barY = bonus.y * GRID_SIZE + GRID_SIZE - margin - barHeight;
+            const ratio = Math.max(0, Math.min(1, bonus.ticks / BONUS_LIFETIME));
+            ctx.fillStyle = 'rgba(10, 10, 18, 0.8)';
+            ctx.fillRect(bonus.x * GRID_SIZE + margin, barY, barWidth, barHeight);
+            ctx.fillStyle = COLORS.bonus;
+            ctx.fillRect(
+                bonus.x * GRID_SIZE + margin,
+                barY,
+                barWidth * ratio,
+                barHeight
+            );
+        }
+
+        function drawComboMeter() {
+            if (combo < 2) return;
+            const multiplier = Math.min(combo, COMBO_CAP);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = 'bold 13px Orbitron, monospace';
+            ctx.fillStyle = COLORS.accent;
+            ctx.shadowColor = COLORS.accent;
+            ctx.shadowBlur = 8;
+            ctx.fillText(`COMBO x${multiplier}`, canvas.width / 2, 16);
+            ctx.shadowBlur = 0;
+
+            const barWidth = 120;
+            const barHeight = 4;
+            const barX = (canvas.width - barWidth) / 2;
+            const barY = 27;
+            const ratio = Math.max(0, Math.min(1, comboTicks / COMBO_WINDOW));
+            ctx.fillStyle = 'rgba(10, 10, 18, 0.8)';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+            ctx.fillStyle = COLORS.accent;
+            ctx.fillRect(barX, barY, barWidth * ratio, barHeight);
+        }
+
+        function addPopup(cellX, cellY, text, color) {
+            floatingTexts.push({
+                x: cellX * GRID_SIZE + GRID_SIZE / 2,
+                y: cellY * GRID_SIZE + GRID_SIZE / 2,
+                text,
+                color,
+                life: 1,
+            });
+        }
+
+        function updateFloatingTexts() {
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = 'bold 12px Orbitron, monospace';
+            floatingTexts = floatingTexts.filter((popup) => {
+                popup.y -= 0.9;
+                popup.life -= 0.025;
+                if (popup.life <= 0) return false;
+                ctx.globalAlpha = Math.max(0, popup.life);
+                ctx.fillStyle = popup.color;
+                ctx.fillText(popup.text, popup.x, popup.y);
+                ctx.globalAlpha = 1;
+                return true;
+            });
+        }
         
         function roundRect(ctx, x, y, w, h, r) {
             ctx.beginPath();
@@ -589,8 +841,10 @@
         }
         
         function getSpeed(currentScore) {
-            return Math.max(MIN_SPEED,
-                START_SPEED - Math.floor(currentScore / SPEED_STEP_SCORE) * SPEED_DROP);
+            return Math.max(
+                preset.minSpeed,
+                preset.startSpeed - Math.floor(currentScore / preset.stepScore) * preset.speedDrop
+            );
         }
 
         function restartGameLoop() {
@@ -616,7 +870,9 @@
             direction = { ...nextDirection };
 
             const head = { x: snake[0].x + direction.x, y: snake[0].y + direction.y };
-            const willGrow = head.x === food.x && head.y === food.y;
+            const eatsFood = head.x === food.x && head.y === food.y;
+            const eatsBonus = bonus !== null && head.x === bonus.x && head.y === bonus.y;
+            const willGrow = eatsFood || eatsBonus;
             // The tail cell vacates this tick unless the snake is growing,
             // so it only counts as a collision when the head eats instead.
             const collisionBody = willGrow ? snake : snake.slice(0, -1);
@@ -629,25 +885,76 @@
             }
 
             snake.unshift(head);
+            moves += 1;
 
-            if (willGrow) {
-                score += 10;
+            if (eatsFood) {
+                foodsEaten += 1;
+                combo += 1;
+                comboTicks = COMBO_WINDOW;
+                maxCombo = Math.max(maxCombo, combo);
+                const multiplier = Math.min(combo, COMBO_CAP);
+                const points = 10 * multiplier;
+                const foodX = food.x;
+                const foodY = food.y;
+                score += points;
+                createParticles(foodX, foodY, COLORS.food, 12);
+                addPopup(
+                    foodX,
+                    foodY,
+                    `+${points}${multiplier > 1 ? ` x${multiplier}` : ''}`,
+                    multiplier > 1 ? COLORS.accent : COLORS.snakeHead
+                );
                 updateScoreDisplay();
-                createParticles(food.x, food.y, COLORS.food, 12);
                 maybeSpeedUp();
+            } else if (comboTicks > 0) {
+                // The window counts moves *between* foods, so a food on the
+                // final allowed move still keeps the combo alive.
+                comboTicks -= 1;
+                if (comboTicks === 0) combo = 0;
+            }
+
+            if (eatsBonus) {
+                const bonusX = bonus.x;
+                const bonusY = bonus.y;
+                score += BONUS_POINTS;
+                bonusEaten += 1;
+                bonus = null;
+                createParticles(bonusX, bonusY, COLORS.bonus, 18);
+                addPopup(bonusX, bonusY, `+${BONUS_POINTS}`, COLORS.bonus);
+                updateScoreDisplay();
+                maybeSpeedUp();
+            } else if (bonus !== null) {
+                bonus.ticks -= 1;
+                if (bonus.ticks <= 0) bonus = null;
+            }
+
+            if (!willGrow) snake.pop();
+
+            if (eatsFood) {
                 spawnFood(); // may end the game if the board filled up
-            } else {
-                snake.pop();
             }
         }
         
         function render() {
             drawGrid();
             drawFood();
+            if (bonus !== null) drawBonus();
             drawSnake();
+            drawComboMeter();
             updateParticles();
+            updateFloatingTexts();
         }
         
+        function persistHighScore() {
+            const isNewHigh = score > highScore;
+            if (isNewHigh) {
+                highScore = score;
+                writeStorage('snakeHighScore', highScore);
+            }
+            updateScoreDisplay();
+            return isNewHigh;
+        }
+
         function gameOver(victory = false) {
             clearInterval(gameLoop);
             gameLoop = null;
@@ -655,22 +962,25 @@
             
             document.getElementById('gameOverTitle').textContent =
                 victory ? 'BOARD CLEARED!' : 'GAME OVER';
-            const isNewHigh = score > highScore;
+            const isNewHigh = persistHighScore();
             if (isNewHigh) {
-                highScore = score;
-                localStorage.setItem('snakeHighScore', highScore);
-                document.getElementById('highScore').textContent = highScore;
                 document.getElementById('newHighScore').classList.remove('hidden');
             } else {
                 document.getElementById('newHighScore').classList.add('hidden');
             }
-            
+
+            const multiplier = Math.max(1, Math.min(maxCombo, COMBO_CAP));
+            document.getElementById('finalStats').textContent =
+                `Foods ${foodsEaten}  •  Golden ${bonusEaten}  •  Max combo x${multiplier}\n` +
+                `Moves ${moves}  •  Length ${snake.length}  •  ${preset.label}`;
             document.getElementById('finalScore').textContent = score;
+            document.getElementById('pauseOverlay').classList.add('hidden');
             document.getElementById('gameOverOverlay').classList.remove('hidden');
         }
         
-        function startGame() {
+        function startGame(startDirection = null) {
             initGame();
+            if (startDirection) nextDirection = startDirection;
             gameState = 'playing';
             document.getElementById('startOverlay').classList.add('hidden');
             document.getElementById('pauseOverlay').classList.add('hidden');
@@ -686,6 +996,9 @@
             if (gameLoop) {
                 clearInterval(gameLoop);
                 gameLoop = null;
+                document.getElementById('pauseStats').textContent =
+                    `Score ${score}  •  Length ${snake.length}  •  Max combo x${Math.max(1, Math.min(maxCombo, COMBO_CAP))}\n` +
+                    `Moves ${moves}  •  ${preset.label}`;
                 document.getElementById('pauseOverlay').classList.remove('hidden');
                 gameState = 'paused';
             } else {
@@ -693,6 +1006,23 @@
                 document.getElementById('pauseOverlay').classList.add('hidden');
                 restartGameLoop();
             }
+        }
+
+        function setDifficulty(key) {
+            if (!DIFFICULTY_PRESETS[key]) return;
+            difficultyKey = key;
+            preset = DIFFICULTY_PRESETS[key];
+            writeStorage('snakeDifficulty', key);
+            updateDifficultyButtons();
+        }
+
+        function updateDifficultyButtons() {
+            document.querySelectorAll('.difficulty-btn').forEach((button) => {
+                button.classList.toggle(
+                    'active',
+                    button.dataset.difficulty === difficultyKey
+                );
+            });
         }
         
         function handleDirection(dx, dy) {
@@ -703,8 +1033,7 @@
                 // A reversing start (e.g. Down while the snake faces up)
                 // would kill the snake instantly — ignore it instead.
                 if (reverses) return;
-                nextDirection = newDir;
-                startGame();
+                startGame(newDir);
             } else if (gameState === 'playing') {
                 if (!reverses) {
                     nextDirection = newDir;
@@ -725,13 +1054,29 @@
                 }
                 return;
             }
+
+            if (e.key === 'r' || e.key === 'R') {
+                if (gameState === 'playing' || gameState === 'paused') {
+                    persistHighScore();
+                    startGame();
+                } else if (gameState === 'gameover') {
+                    startGame();
+                }
+                return;
+            }
+
+            if (gameState === 'start' && ['1', '2', '3'].includes(e.key)) {
+                setDifficulty(DIFFICULTY_KEYS[Number(e.key) - 1]);
+                return;
+            }
             
             if (DIRS[e.key]) {
                 e.preventDefault();
                 handleDirection(...DIRS[e.key]);
             }
             
-            if ((e.key === ' ' || e.key === 'Enter') && gameState === 'gameover') {
+            if ((e.key === ' ' || e.key === 'Enter') &&
+                (gameState === 'start' || gameState === 'gameover')) {
                 startGame();
             }
             
@@ -764,11 +1109,28 @@
         }, { passive: true });
         
         document.querySelectorAll('.d-btn').forEach(btn => {
-            btn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
+            btn.addEventListener('click', (event) => {
+                event.preventDefault();
                 handleDirection(...DPAD[btn.dataset.dir]);
             });
         });
+
+        document.querySelectorAll('.difficulty-btn').forEach((button) => {
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                setDifficulty(button.dataset.difficulty);
+            });
+        });
+
+        document.getElementById('pauseBtn').addEventListener('click', () => {
+            togglePause();
+        });
+
+        document.getElementById('pauseOverlay').addEventListener('click', () => {
+            togglePause();
+        });
+
+        updateDifficultyButtons();
         
         // Tap the start screen to begin (handy on touch devices).
         document.getElementById('startOverlay').addEventListener('click', () => {
@@ -777,10 +1139,21 @@
             }
         });
         
-        // Don't keep playing while the tab is hidden in the background.
+        // Don't keep playing while the tab is hidden in the background, and
+        // never lose a new best score just because the tab was closed.
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden && gameState === 'playing') {
+            if (!document.hidden) return;
+            if (gameState === 'playing' || gameState === 'paused') {
+                persistHighScore();
+            }
+            if (gameState === 'playing') {
                 togglePause();
+            }
+        });
+
+        window.addEventListener('pagehide', () => {
+            if (gameState === 'playing' || gameState === 'paused') {
+                persistHighScore();
             }
         });
         

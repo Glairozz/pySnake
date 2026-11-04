@@ -172,6 +172,8 @@ class Renderer:
         self.particles = ParticleSystem(config)
         self.floating_text: list[FloatingText] = []
         self.toasts: list[Toast] = []
+        self.flash = 0.0
+        self.flash_color: tuple[int, int, int] = COLORS["food"]
         self._overlays: dict[int, pygame.Surface] = {}
         self._create_fonts()
 
@@ -209,6 +211,8 @@ class Renderer:
                     else COLORS["food"]
                 )
                 self.particles.burst(event.position, color, 10)
+                self.flash = 0.4
+                self.flash_color = color
 
     def _add_score_popup(self, event: GameEvent) -> None:
         if event.position is None or event.value <= 0:
@@ -229,6 +233,8 @@ class Renderer:
         self.particles.update(dt)
         self.floating_text = [popup for popup in self.floating_text if popup.update(dt)]
         self.toasts = [toast for toast in self.toasts if toast.update(dt)]
+        if self.flash > 0.0:
+            self.flash = max(0.0, self.flash - dt * 1.8)
 
     # -- text helpers -------------------------------------------------------
 
@@ -300,6 +306,7 @@ class Renderer:
         self._draw_header(game)
         self._draw_speed_progress(game)
         self._draw_combo_meter(game)
+        self._draw_flash()
 
         if game.state is GameState.START:
             self._draw_start_screen(game, sound_enabled, volume)
@@ -546,8 +553,11 @@ class Renderer:
         best_color = (
             COLORS["warning"] if game.score > game.high_score else COLORS["accent"]
         )
+        best_text = f"Best {game.high_score}"
+        if config.width >= 520:
+            best_text += f" · {game.speed}/s"
         self._text(
-            f"Best {game.high_score}",
+            best_text,
             best_font,
             best_color,
             (config.width - 16, middle),
@@ -610,6 +620,18 @@ class Renderer:
             (bar_x, bar_y, int(bar_width * ratio), bar_height),
             border_radius=bar_height,
         )
+
+    def _draw_flash(self) -> None:
+        """A quick tinted flash for game-ending moments."""
+        if self.flash <= 0.0:
+            return
+        strength = max(0.0, min(1.0, self.flash / 0.4))
+        tint = pygame.Surface(
+            (self.config.width, self.config.height),
+            pygame.SRCALPHA,
+        )
+        tint.fill((*self.flash_color, int(90 * strength)))
+        self.surface.blit(tint, (0, 0))
 
     def _draw_toasts(self) -> None:
         if not self.toasts:
@@ -839,13 +861,24 @@ class Renderer:
             "PAUSED",
             self.title_font,
             COLORS["accent"],
-            (config.width // 2, int(config.height * 0.34)),
+            (config.width // 2, int(config.height * 0.30)),
         )
         self._text(
             "P or a direction key to resume",
             self.body_font,
             COLORS["text"],
-            (config.width // 2, int(config.height * 0.45)),
+            (config.width // 2, int(config.height * 0.40)),
+        )
+        summary = (
+            f"Score {game.score}    Length {game.length}    "
+            f"Max combo x{max(1, min(game.max_combo, config.combo_multiplier_cap))}    "
+            f"Moves {game.moves}"
+        )
+        self._text(
+            summary,
+            self.body_font,
+            COLORS["text"],
+            (config.width // 2, int(config.height * 0.49)),
         )
         sound_state = "off" if not sound_enabled else f"{int(volume * 100)}%"
         status = (
@@ -858,20 +891,20 @@ class Renderer:
             status,
             self.small_font,
             COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.54)),
+            (config.width // 2, int(config.height * 0.57)),
         )
         hints = "R restarts   [ ] changes volume   G grid   M sound"
         self._text(
             hints,
             self.small_font,
             COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.62)),
+            (config.width // 2, int(config.height * 0.65)),
         )
         self._text(
             "ESC quits the game",
             self.small_font,
             COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.71)),
+            (config.width // 2, int(config.height * 0.73)),
         )
 
     # -- game over ----------------------------------------------------------
@@ -879,60 +912,78 @@ class Renderer:
     def _draw_game_over_screen(self, game: Game) -> None:
         config = self.config
         self.surface.blit(self._overlay(205), (0, 0))
+
         title = "BOARD CLEARED!" if game.victory else "GAME OVER"
         title_color = COLORS["warning"] if game.victory else COLORS["food"]
-        self._text(
-            title,
-            self.title_font,
-            title_color,
-            (config.width // 2, int(config.height * 0.29)),
-            shadow=COLORS["bg"],
-        )
-        self._text(
-            f"Score {game.score}",
-            self.heading_font,
-            COLORS["text"],
-            (config.width // 2, int(config.height * 0.42)),
-        )
-        if game.is_new_high:
-            self._text(
-                "NEW HIGH SCORE!",
-                self.body_font,
-                COLORS["accent"],
-                (config.width // 2, int(config.height * 0.50)),
-            )
+        scale = max(0.65, min(1.25, config.height / 650.0))
+        compact = config.height < 380
 
-        details = f"Best {game.high_score}"
-        if game.stats.games_played:
-            details += f"    Games {game.stats.games_played}"
+        summary_1 = (
+            f"Foods {game.foods_eaten}    Golden {game.bonus_eaten}    "
+            f"Max combo x{max(1, min(game.max_combo, config.combo_multiplier_cap))}"
+        )
+        summary_2 = (
+            f"Moves {game.moves}    Length {game.length}    Speed {game.speed}/s"
+        )
+        details = f"Best {game.high_score}    Games {game.stats.games_played}"
         if game.stats.best_length:
             details += f"    Longest {game.stats.best_length}"
         details += (
             f"    Achievements {len(game.stats.achievements)}/{len(ACHIEVEMENTS)}"
         )
-        self._text(
-            details,
-            self.small_font,
-            COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.58)),
-        )
         leaderboard = self._leaderboard_line(game)
-        if leaderboard is not None:
-            self._text(
-                leaderboard,
-                self.small_font,
+
+        body_font = self.small_font if compact else self.body_font
+        lines: list[tuple[str, pygame.font.Font, tuple[int, int, int], int]] = [
+            (title, self.title_font, title_color, 0),
+            (
+                f"Score {game.score}",
+                self.heading_font,
                 COLORS["text"],
-                (config.width // 2, int(config.height * 0.65)),
+                int(16 * scale),
+            ),
+        ]
+        if game.is_new_high:
+            lines.append(
+                (
+                    "NEW HIGH SCORE!",
+                    self.body_font,
+                    COLORS["accent"],
+                    int(6 * scale),
+                )
             )
-        self._text(
-            "Press SPACE or ENTER to play again",
-            self.body_font,
-            COLORS["text"],
-            (config.width // 2, int(config.height * 0.74)),
+        lines.append((summary_1, body_font, COLORS["text"], int(18 * scale)))
+        lines.append((summary_2, body_font, COLORS["text"], int(2 * scale)))
+        lines.append((details, self.small_font, COLORS["dim_text"], int(16 * scale)))
+        if leaderboard is not None:
+            lines.append((leaderboard, self.small_font, COLORS["text"], int(8 * scale)))
+        lines.append(
+            (
+                "Press SPACE or ENTER to play again",
+                self.body_font,
+                COLORS["text"],
+                int(20 * scale),
+            )
         )
-        self._text(
-            "ESC quits the game",
-            self.small_font,
-            COLORS["dim_text"],
-            (config.width // 2, int(config.height * 0.82)),
+        lines.append(
+            (
+                "ESC quits the game",
+                self.small_font,
+                COLORS["dim_text"],
+                int(6 * scale),
+            )
         )
+
+        total = sum(font.get_height() + gap for _, font, _, gap in lines)
+        y = max(6, (config.height - total) // 2)
+        center_x = config.width // 2
+        for text, font, color, gap in lines:
+            y += gap
+            self._text(
+                text,
+                font,
+                color,
+                (center_x, y + font.get_height() // 2),
+                shadow=COLORS["bg"] if font is self.title_font else None,
+            )
+            y += font.get_height()

@@ -21,25 +21,31 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
   score grows.
 - Combo scoring: chain foods within a move window for up to 3× points, with a
   live combo meter and floating score popups.
-- Eight persistent achievements, from the first bite to clearing the board.
+- Ten persistent achievements, from the first bite to clearing the board.
 - Classic solid walls or an optional wrap-around board (`--wrap`) where the
   snake reappears on the opposite edge.
-- Food never spawns inside the snake. Wall and self-collision detection is
-  accurate, including the classic "follow your own tail" rule.
+- Food never spawns inside the snake or on top of the golden bonus. Wall and
+  self-collision detection is accurate, including the classic "follow your own
+  tail" rule.
 - Golden bonus food appears every five regular foods, is worth 30 points and
   expires after a limited number of moves.
 - A persistent top-five leaderboard, high score and play statistics, saved in
   an atomically written JSON file.
 - Toggleable grid and sound effects with adjustable volume. Sounds are
   synthesised at runtime, so there are no audio files to download.
-- A slim HUD bar shows progress towards the next speed-up.
+- A slim HUD bar shows progress towards the next speed-up, and the header shows
+  the current speed.
 - Resizable window with aspect-ratio-preserving letterboxing, plus a
   fullscreen toggle (`F11`).
-- Configurable board dimensions, cell size, difficulty, edge mode and random
-  seed via command-line options.
-- The game auto-pauses when the window loses focus.
+- Configurable board dimensions, cell size, starting length, difficulty, edge
+  mode, bonus settings, volume and random seed via command-line options.
+- The game auto-pauses when the window loses focus or is minimised.
 - Score, best score, difficulty, leaderboard and progress feedback are always
   visible.
+- A detailed game-over summary shows foods eaten, golden foods, best combo,
+  moves, final length and speed.
+- The legacy browser demo in `index.html` now also supports combos, golden
+  bonus food, difficulty selection and a run summary.
 
 ## Requirements
 
@@ -101,16 +107,18 @@ Notes:
 | Combo | Up to 3× points for chaining foods within 60 moves |
 | High score | Saved after game over, restart or quitting mid-run |
 | Leaderboard | The best 5 scores persist between sessions |
-| Achievements | 8 milestones persist across every run |
+| Achievements | 10 milestones persist across every run |
 | Board cleared | Reaching every cell ends the run in victory |
 
 ### Combos
 
 Eating a regular food starts a combo. Eat another regular food before the
 combo window (60 moves by default) expires and the multiplier rises from 1×
-to 2×, then 3× (the cap). The current combo and its remaining window are shown
-above the board, and each food awards a floating score popup. Golden bonus
-food always gives its flat 30 points and does not break or extend a combo.
+to 2×, then 3× (the cap). The window counts moves strictly between foods, so a
+food eaten on the final allowed move still keeps the combo alive. The current
+combo and its remaining window are shown above the board, and each food awards
+a floating score popup. Golden bonus food always gives its flat 30 points and
+does not break or extend a combo.
 
 Use `--combo-window N` to make combos more or less forgiving, and
 `--combo-cap N` to change the maximum multiplier.
@@ -126,10 +134,12 @@ Use `--combo-window N` to make combos more or less forgiving, and
 | Bonus Hunter | Eat three golden foods |
 | Survivor | Survive 500 moves |
 | Wrap Walker | Wrap around an edge (`--wrap`) |
+| Full Throttle | Reach the maximum speed for the selected difficulty |
+| Veteran | Finish 10 games |
 | Board Clearer | Fill the entire board |
 
 Unlocks are saved immediately and announced with an in-game toast. The start
-and game-over screens show how many of the eight you have collected.
+and game-over screens show how many of the ten you have collected.
 
 ### Edge modes
 
@@ -168,6 +178,12 @@ python snake.py --data-file scores/highscore.json --no-grid
 # Disable the golden bonus food or start muted
 python snake.py --no-bonus --mute
 
+# Tune the golden food and start at 40% volume
+python snake.py --bonus-every 8 --bonus-lifetime 30 --bonus-points 50 --volume 0.4
+
+# Start with a longer snake
+python snake.py --start-length 5
+
 # Play on a wrap-around board in fullscreen
 python snake.py --wrap --fullscreen
 
@@ -185,11 +201,16 @@ python snake.py --combo-window 100 --combo-cap 2
 | `--data-file PATH` | High-score/statistics file (default `highscore.json` next to `snake.py`) |
 | `--no-grid` | Start with the grid hidden (toggle with `G`) |
 | `--no-bonus` | Disable golden bonus food |
+| `--bonus-every N` | Regular foods between golden spawns (default 5) |
+| `--bonus-lifetime N` | Moves before golden food expires (default 50) |
+| `--bonus-points N` | Points awarded by golden food (default 30) |
+| `--start-length N` | Initial snake length (default 3) |
 | `--combo-window N` | Moves allowed between foods to keep a combo (default 60) |
 | `--combo-cap N` | Maximum combo score multiplier (default 3) |
 | `--wrap` | Wrap around the edges instead of hitting solid walls |
 | `--fullscreen` | Start in fullscreen (toggle with `F11`) |
 | `--mute` | Start with sound muted (toggle with `M`) |
+| `--volume F` | Initial sound volume from 0.0 to 1.0 (default 0.8) |
 
 Board dimensions are fixed for the session. The window is validated before it
 opens; impossible dimensions produce a clear error instead of a broken window.
@@ -204,6 +225,7 @@ By default the game stores its data in `highscore.json` next to `snake.py`:
   "games_played": 12,
   "last_score": 80,
   "best_length": 18,
+  "best_combo": 3,
   "top_scores": [240, 180, 120, 90, 80],
   "achievements": ["first_bite", "combo_master", "century"]
 }
@@ -215,7 +237,8 @@ By default the game stores its data in `highscore.json` next to `snake.py`:
   invalid fields fall back to safe defaults and the game still starts.
 - Scores are sanitised, sorted best-first and trimmed to the best five. A run
   that is abandoned with `R` still reaches the leaderboard, but it does not
-  increment `games_played`.
+  increment `games_played`; the longest body and best combo records are still
+  updated.
 - Achievements are stored as stable keys. Unknown or duplicate entries are
   discarded when the file is loaded, and unlocks are written immediately.
 - Older files containing only `{"high_score": 120}` are still supported.
@@ -237,15 +260,15 @@ and the smoke tests select SDL's dummy video and audio drivers. They cover:
 - movement in every direction, turn buffering and rejected reversals
 - solid-wall and wrap-around edges, body collisions and the vacating-tail rule
 - food spawning, full boards, scoring, bonus food and expiry
-- combo scaling, expiry, bonus interaction and floating score events
+- combo scaling, expiry, last-move chaining, bonus interaction and score events
 - achievement unlocking, persistence and sanitisation
 - all state transitions, restart, instant restart, victory and game over
 - high-score, leaderboard and statistics persistence, including corrupt files
 - window scaling, sound volume, configuration validation and pygame/CLI smoke
   tests
 
-Continuous integration runs the full suite on Python 3.9, 3.11 and 3.12, plus
-Ruff linting and formatting checks, via GitHub Actions.
+Continuous integration runs the full suite on Python 3.9, 3.11, 3.12 and 3.13,
+plus Ruff linting and formatting checks, via GitHub Actions.
 
 Run a single group, for example:
 
@@ -272,7 +295,7 @@ pyproject.toml        Ruff lint/format configuration
 requirements.txt      Runtime dependency (pygame)
 requirements-dev.txt  Test and lint dependencies
 .github/workflows/    GitHub Actions continuous integration
-index.html            Legacy optional browser demo (not part of the Python game)
+index.html            Optional browser demo with combos, bonus food and difficulty levels
 ```
 
 ## Troubleshooting

@@ -119,6 +119,27 @@ def test_renderer_turns_events_into_score_popups_and_toasts(tmp_path, monkeypatc
     pygame.quit()
 
 
+def test_renderer_draws_the_game_over_summary_and_fades_the_flash(
+    tmp_path, monkeypatch
+):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    game.start()
+    game.score = 40
+    game.foods_eaten = 4
+    game.bonus_eaten = 1
+    game.max_combo = 2
+    game.moves = 25
+    game.state = GameState.GAME_OVER
+    renderer.flash = 0.4
+    renderer.flash_color = (255, 0, 0)
+
+    renderer.draw(game, sound_enabled=False, volume=0.0)
+    renderer.update(0.5)
+
+    assert renderer.flash == 0.0
+    pygame.quit()
+
+
 def test_cli_arguments_build_a_valid_configuration():
     parser = snake.build_parser()
     args = parser.parse_args(
@@ -135,6 +156,16 @@ def test_cli_arguments_build_a_valid_configuration():
             "42",
             "--no-grid",
             "--no-bonus",
+            "--bonus-every",
+            "3",
+            "--bonus-lifetime",
+            "20",
+            "--bonus-points",
+            "40",
+            "--start-length",
+            "4",
+            "--volume",
+            "0.4",
             "--combo-window",
             "30",
             "--combo-cap",
@@ -156,6 +187,11 @@ def test_cli_arguments_build_a_valid_configuration():
     assert config.seed == 42
     assert config.show_grid is False
     assert config.bonus_food is False
+    assert config.bonus_every == 3
+    assert config.bonus_lifetime == 20
+    assert config.bonus_points == 40
+    assert config.start_length == 4
+    assert config.volume == pytest.approx(0.4)
     assert config.combo_window == 30
     assert config.combo_multiplier_cap == 4
     assert config.wrap is True
@@ -180,6 +216,8 @@ def test_cli_help_works_without_opening_a_window(capsys):
     assert "--difficulty" in output
     assert "--seed" in output
     assert "--combo-window" in output
+    assert "--bonus-every" in output
+    assert "--volume" in output
     assert "--wrap" in output
     assert "--fullscreen" in output
 

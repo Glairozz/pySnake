@@ -270,13 +270,17 @@ def run_game(
     # HUD layout never has to change.
     canvas = pygame.Surface((config.width, config.height))
     renderer = Renderer(canvas, config)
-    sound = SoundBank(config.sound)
+    sound = SoundBank(config.sound, config.volume)
     clock = pygame.time.Clock()
 
     running = True
     frames = 0
     accumulator = 0.0
-    focus_lost_event = getattr(pygame, "WINDOWFOCUSLOST", None)
+    pause_events = {
+        getattr(pygame, name)
+        for name in ("WINDOWFOCUSLOST", "WINDOWMINIMIZED")
+        if hasattr(pygame, name)
+    }
 
     try:
         while running:
@@ -294,11 +298,7 @@ def run_game(
                 elif event.type == pygame.VIDEORESIZE and not fullscreen:
                     size = (max(320, event.w), max(240, event.h))
                     screen = pygame.display.set_mode(size, pygame.RESIZABLE)
-                elif (
-                    focus_lost_event is not None
-                    and event.type == focus_lost_event
-                    and game.state is GameState.PLAYING
-                ):
+                elif event.type in pause_events and game.state is GameState.PLAYING:
                     game.toggle_pause()
             if not running:
                 break

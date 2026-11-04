@@ -27,6 +27,7 @@ DEFAULT_ROWS = 24
 DEFAULT_CELL_SIZE = 25
 DEFAULT_HEADER_HEIGHT = 50
 DEFAULT_START_LENGTH = 3
+DEFAULT_VOLUME = 0.8
 
 #: Rendering runs at a steady frame rate; game moves happen on a fixed tick
 #: schedule inside that loop.  This keeps movement timing independent of the
@@ -127,15 +128,20 @@ ACHIEVEMENTS: dict[str, Achievement] = {
     ),
     "survivor": Achievement("survivor", "Survivor", "Survive 500 moves"),
     "wrap_walker": Achievement("wrap_walker", "Wrap Walker", "Wrap around an edge"),
+    "speed_demon": Achievement(
+        "speed_demon", "Full Throttle", "Reach the maximum speed"
+    ),
+    "veteran": Achievement("veteran", "Veteran", "Finish 10 games"),
     "victory": Achievement("victory", "Board Clearer", "Fill the entire board"),
 }
 ACHIEVEMENT_KEYS = tuple(ACHIEVEMENTS)
 
-#: Thresholds for the score, length, bonus and survival achievements.
+#: Thresholds for the score, length, bonus, survival and veteran achievements.
 CENTURY_SCORE = 100
 LONG_BODY_LENGTH = 15
 BONUS_HUNTER_COUNT = 3
 SURVIVOR_MOVES = 500
+VETERAN_GAMES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +179,8 @@ class GameConfig:
     combo_window: int = 60
     #: The largest score multiplier a combo can reach.
     combo_multiplier_cap: int = 3
+    #: Initial sound-effect volume, from 0.0 (silent) to 1.0 (loudest).
+    volume: float = DEFAULT_VOLUME
 
     def __post_init__(self) -> None:
         """Normalise the data-file path and reject impossible settings."""
@@ -208,6 +216,8 @@ class GameConfig:
             raise ValueError("bonus-food settings must be positive")
         if self.combo_window < 1 or self.combo_multiplier_cap < 1:
             raise ValueError("combo settings must be positive")
+        if not 0.0 <= self.volume <= 1.0:
+            raise ValueError("volume must be between 0.0 and 1.0")
 
     @property
     def width(self) -> int:

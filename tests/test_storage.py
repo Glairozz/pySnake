@@ -17,9 +17,24 @@ from pysnake.storage import (
 
 def test_stats_roundtrip(tmp_path):
     path = tmp_path / "scores.json"
-    original = Stats(high_score=120, games_played=7, last_score=80, best_length=14)
+    original = Stats(
+        high_score=120,
+        games_played=7,
+        last_score=80,
+        best_length=14,
+        best_combo=3,
+    )
     assert save_stats(original, path) is True
     assert load_stats(path) == original
+
+
+def test_best_combo_defaults_to_zero_and_is_sanitised(tmp_path):
+    path = tmp_path / "scores.json"
+    path.write_text(json.dumps({"best_combo": -2}), encoding="utf-8")
+    assert load_stats(path).best_combo == 0
+
+    path.write_text(json.dumps({"best_combo": "not-a-number"}), encoding="utf-8")
+    assert load_stats(path).best_combo == 0
 
 
 def test_missing_file_returns_blank_stats(tmp_path):

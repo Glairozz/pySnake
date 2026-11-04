@@ -78,6 +78,7 @@ class Stats:
     games_played: int = 0
     last_score: int = 0
     best_length: int = 0
+    best_combo: int = 0
     top_scores: list[int] = field(default_factory=list)
     achievements: list[str] = field(default_factory=list)
 
@@ -88,6 +89,7 @@ class Stats:
             "games_played": _non_negative_int(self.games_played),
             "last_score": _non_negative_int(self.last_score),
             "best_length": _non_negative_int(self.best_length),
+            "best_combo": _non_negative_int(self.best_combo),
             "top_scores": _score_list(self.top_scores),
             "achievements": _achievement_list(self.achievements),
         }
@@ -100,6 +102,7 @@ class Stats:
             games_played=_non_negative_int(data.get("games_played")),
             last_score=_non_negative_int(data.get("last_score")),
             best_length=_non_negative_int(data.get("best_length")),
+            best_combo=_non_negative_int(data.get("best_combo")),
             top_scores=_score_list(data.get("top_scores")),
             achievements=_achievement_list(data.get("achievements")),
         )
