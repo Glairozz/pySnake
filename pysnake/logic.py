@@ -18,6 +18,7 @@ from .config import (
     ACHIEVEMENT_KEYS,
     BONUS_HUNTER_COUNT,
     CENTURY_SCORE,
+    DAREDEVIL_FOODS,
     DIFFICULTIES,
     LONG_BODY_LENGTH,
     MAX_QUEUED_TURNS,
@@ -124,6 +125,10 @@ class Snake:
         self._pending: deque[Direction] = deque()
         self.grow = False
         self.wrapped_last_move = False
+        #: Static cells that end the run on contact; managed by :class:`Game`.
+        self.obstacles: frozenset[Cell] = frozenset()
+        #: Where each segment was one tick ago, used to smooth rendering.
+        self.previous_body: list[Cell] = []
         self.reset()
 
     def reset(self) -> None:
@@ -138,6 +143,15 @@ class Snake:
         self._pending.clear()
         self.grow = False
         self.wrapped_last_move = False
+        self.previous_body = list(self.body)
+
+    def sync_previous(self) -> None:
+        """Freeze smooth rendering at the current cells.
+
+        Called when the game pauses or ends, so the snake is shown exactly
+        where it logically is instead of mid-slide between two ticks.
+        """
+        self.previous_body = list(self.body)
 
     @property
     def head(self) -> Cell:
@@ -172,7 +186,7 @@ class Snake:
         return True
 
     def move(self) -> bool:
-        """Advance one step; return False on a wall or body collision.
+        """Advance one step; return False on a wall, obstacle or body collision.
 
         In wrap mode the snake leaves one edge and reappears on the opposite
         edge instead of hitting a wall.  The tail cell is exempt while it is
@@ -195,14 +209,16 @@ class Snake:
         new_head = (x, y)
 
         occupied = self.body if self.grow else self.body[:-1]
-        if new_head in occupied:
+        if new_head in occupied or new_head in self.obstacles:
             return False
 
+        previous = list(self.body)
         self.body.insert(0, new_head)
         if self.grow:
             self.grow = False
         else:
             self.body.pop()
+        self.previous_body = previous
         self.wrapped_last_move = wrapped
         return True
 
@@ -263,8 +279,8 @@ class Game:
         self.difficulty: Difficulty = DIFFICULTIES[self.config.difficulty]
         self.snake = Snake(self.config)
         self.food = Food(self.config, self.rng)
-        self.food.spawn(self.snake.body)
         self.bonus: BonusFood | None = None
+        self.obstacles: frozenset[Cell] = frozenset()
 
         self.state = GameState.START
         self.score = 0
@@ -278,6 +294,7 @@ class Game:
         self.is_new_high = False
         self.victory = False
         self._events: list[GameEvent] = []
+        self._reset_run()
 
     # -- read-only state ----------------------------------------------------
 
@@ -359,6 +376,7 @@ class Game:
         """Pause a running game, or resume a paused one."""
         if self.state is GameState.PLAYING:
             self.state = GameState.PAUSED
+            self.snake.sync_previous()
             self._emit(EventKind.PAUSED)
             return True
         if self.state is GameState.PAUSED:
@@ -421,7 +439,11 @@ class Game:
     def _reset_run(self) -> None:
         """Clear everything that belongs to a single run."""
         self.snake.reset()
-        self.food.spawn(self.snake.body)
+        self.obstacles = (
+            self._spawn_obstacles() if self.config.obstacles else frozenset()
+        )
+        self.snake.obstacles = self.obstacles
+        self.food.spawn(set(self.snake.body) | self.obstacles)
         self.bonus = None
         self.score = 0
         self.foods_eaten = 0
@@ -434,6 +456,23 @@ class Game:
         self.is_new_high = False
         self.victory = False
         self._events.clear()
+
+    def _spawn_obstacles(self) -> frozenset[Cell]:
+        """Scatter obstacle blocks, keeping the snake's start column clear.
+
+        The whole starting column stays obstacle-free so every run begins
+        with a guaranteed escape route; the rest of the board is fair game.
+        """
+        safe_column = self.snake.head[0]
+        taken = set(self.snake.body)
+        candidates = [
+            (x, y)
+            for y in range(self.config.rows)
+            for x in range(self.config.cols)
+            if x != safe_column and (x, y) not in taken
+        ]
+        count = min(self.config.obstacle_count, len(candidates))
+        return frozenset(self.rng.sample(candidates, count))
 
     # -- simulation ---------------------------------------------------------
 
@@ -503,7 +542,7 @@ class Game:
             combo=multiplier,
         )
 
-        occupied = set(self.snake.body)
+        occupied = set(self.snake.body) | self.obstacles
         if self.bonus is not None:
             occupied.add(self.bonus.position)
         if not self.food.spawn(occupied):
@@ -531,7 +570,7 @@ class Game:
         )
 
     def _spawn_bonus(self) -> None:
-        occupied = set(self.snake.body)
+        occupied = set(self.snake.body) | self.obstacles
         occupied.add(self.food.position)
         cell = random_free_cell(
             self.config.cols,
@@ -554,6 +593,7 @@ class Game:
             "wrap_walker": self.wrapped_once,
             "speed_demon": self.speed >= self.difficulty.max_speed,
             "veteran": self.stats.games_played >= VETERAN_GAMES,
+            "daredevil": self.config.obstacles and self.foods_eaten >= DAREDEVIL_FOODS,
             "victory": self.victory,
         }
         unlocked = False
@@ -571,6 +611,7 @@ class Game:
     def _end_game(self, victory: bool) -> None:
         self.victory = victory
         self.state = GameState.GAME_OVER
+        self.snake.sync_previous()
         self.is_new_high = self.score > self.stats.high_score
 
         self.stats.games_played += 1

@@ -7,6 +7,7 @@ import random
 import pytest
 
 from pysnake.config import (
+    DAREDEVIL_FOODS,
     DIFFICULTIES,
     MAX_QUEUED_TURNS,
     GameConfig,
@@ -220,6 +221,38 @@ def test_input_spam_never_creates_self_overlap():
 
 
 # ---------------------------------------------------------------------------
+# Smooth rendering state
+# ---------------------------------------------------------------------------
+
+
+def test_previous_body_lags_one_move_behind():
+    snake = Snake(SMALL_BOARD)
+    old_head = snake.head
+    assert snake.previous_body == snake.body
+
+    assert snake.move() is True
+    assert snake.previous_body != snake.body
+    assert snake.previous_body[0] == old_head
+    assert snake.body[1] == old_head  # the neck now sits where the head was
+
+
+def test_reset_restores_a_matching_previous_body():
+    snake = Snake(SMALL_BOARD)
+    snake.move()
+    snake.move()
+    snake.reset()
+    assert snake.previous_body == snake.body
+
+
+def test_sync_previous_freezes_the_snake_at_its_cells():
+    snake = Snake(SMALL_BOARD)
+    snake.move()
+    assert snake.previous_body != snake.body
+    snake.sync_previous()
+    assert snake.previous_body == snake.body
+
+
+# ---------------------------------------------------------------------------
 # Wrap-around mode
 # ---------------------------------------------------------------------------
 
@@ -259,6 +292,163 @@ def test_wrap_is_opt_in():
     snake = Snake(GameConfig(cols=12, rows=12))
     place_snake(snake, [(0, 5), (1, 5), (2, 5)], (-1, 0))
     assert snake.move() is False
+
+
+# ---------------------------------------------------------------------------
+# Obstacle mode
+# ---------------------------------------------------------------------------
+
+
+def test_obstacles_avoid_the_starting_column_and_snake(tmp_path):
+    config = make_config(tmp_path, obstacles=True, obstacle_count=12)
+    game = Game(config)
+    column = game.snake.head[0]
+
+    assert len(game.obstacles) == 12
+    assert all(x != column for x, _ in game.obstacles)
+    assert not game.obstacles & set(game.snake.body)
+    assert game.snake.obstacles == game.obstacles
+
+
+def test_obstacles_are_reproducible_with_a_seed(tmp_path):
+    config = make_config(tmp_path, obstacles=True, obstacle_count=8)
+    assert Game(config).obstacles == Game(config).obstacles
+
+
+def test_each_run_gets_a_fresh_obstacle_layout(tmp_path):
+    config = make_config(tmp_path, obstacles=True, obstacle_count=8)
+    game = Game(config)
+    first = game.obstacles
+    game.start()
+    game.restart_run()
+
+    assert len(game.obstacles) == 8
+    assert game.obstacles != first
+
+
+def test_obstacles_stop_the_snake_like_walls():
+    snake = Snake(SMALL_BOARD)
+    snake.obstacles = frozenset({(6, 5)})
+    place_snake(snake, [(6, 6), (6, 7), (6, 8)], (0, -1))
+    assert snake.move() is False
+    assert snake.head == (6, 6)
+    assert len(snake.body) == 3
+
+
+def test_running_into_an_obstacle_ends_the_run(tmp_path):
+    config = make_config(tmp_path, obstacles=True, obstacle_count=6)
+    game = Game(config)
+    game.start()
+    game.drain_events()
+
+    head_x, head_y = game.snake.head
+    blocker = (head_x, head_y - 1)
+    game.obstacles = game.obstacles | {blocker}
+    game.snake.obstacles = game.obstacles
+    game.tick()
+
+    assert game.state is GameState.GAME_OVER
+    assert game.victory is False
+    assert game.snake.head == (head_x, head_y)
+
+
+def test_obstacles_work_together_with_wrap_mode(tmp_path):
+    config = make_config(tmp_path, wrap=True, obstacles=True, obstacle_count=6)
+    game = Game(config)
+    game.start()
+
+    place_snake(game.snake, [(6, 0), (6, 1), (6, 2)], (0, -1))
+    game.tick()
+    assert game.state is GameState.PLAYING
+    assert game.snake.head == (6, config.rows - 1)
+
+    # Wrapping around the edge is fine, but an obstacle in the path still
+    # ends the run exactly like a solid wall would.
+    game.obstacles = game.obstacles | {(6, config.rows - 2)}
+    game.snake.obstacles = game.obstacles
+    game.tick()
+    assert game.state is GameState.GAME_OVER
+
+
+def test_food_and_bonus_never_spawn_on_obstacles(tmp_path):
+    config = make_config(tmp_path, obstacles=True, obstacle_count=10)
+    game = Game(config)
+
+    assert game.food.position not in game.obstacles
+    assert game.food.position not in game.snake.body
+
+
+def test_bonus_food_avoids_obstacles(tmp_path):
+    config = make_config(tmp_path, obstacles=True, obstacle_count=10, bonus_every=2)
+    game = Game(config)
+    game.start()
+
+    for _ in range(2):
+        place_snake(game.snake, [(6, 6), (6, 7), (6, 8)], (0, -1))
+        game.food.position = (6, 5)
+        game.tick()
+
+    assert game.bonus is not None
+    assert game.bonus.position not in game.obstacles
+    assert game.bonus.position not in game.snake.body
+    assert game.bonus.position != game.food.position
+
+
+def test_obstacle_board_victory_fills_every_free_cell(tmp_path):
+    config = make_config(
+        tmp_path, cols=8, rows=8, obstacles=True, obstacle_count=1, bonus_every=99
+    )
+    game = Game(config)
+    game.start()
+    game.drain_events()
+
+    obstacle = next(iter(game.obstacles))
+    target = (4, 0)  # the starting column is always obstacle-free
+    head = (4, 1)
+    assert target != obstacle
+    others = [
+        (x, y)
+        for y in range(config.rows)
+        for x in range(config.cols)
+        if (x, y) not in (obstacle, target, head)
+    ]
+    place_snake(game.snake, [head, *others], (0, -1))
+    # Growing on the final move keeps the tail cell occupied, so the body
+    # really covers every free cell once the head reaches the target.
+    game.snake.grow = True
+    game.food.position = target
+
+    game.tick()
+
+    assert game.state is GameState.GAME_OVER
+    assert game.victory is True
+    assert "victory" in game.stats.achievements
+    assert EventKind.VICTORY in [event.kind for event in game.drain_events()]
+
+
+def test_daredevil_achievement_unlocks_on_obstacle_runs(tmp_path):
+    config = make_config(tmp_path, obstacles=True, obstacle_count=6)
+    game = Game(config)
+    game.start()
+    game.drain_events()
+
+    for _ in range(DAREDEVIL_FOODS):
+        place_snake(game.snake, [(6, 6), (6, 7), (6, 8)], (0, -1))
+        game.food.position = (6, 5)
+        game.tick()
+        assert game.state is GameState.PLAYING
+
+    assert "daredevil" in game.stats.achievements
+    assert "daredevil" in load_stats(config.data_file).achievements
+
+
+def test_daredevil_achievement_needs_obstacles(tmp_path):
+    config = make_config(tmp_path, obstacles=False)
+    game = Game(config)
+    game.start()
+    game.foods_eaten = DAREDEVIL_FOODS
+    game.tick()
+    assert "daredevil" not in game.stats.achievements
 
 
 # ---------------------------------------------------------------------------
@@ -721,6 +911,16 @@ def test_pause_stops_ticks_and_direction_resumes(tmp_path):
     assert game.snake.next_direction == (1, 0)
 
 
+def test_pausing_freezes_the_snake_at_its_current_cells(tmp_path):
+    game = Game(make_config(tmp_path))
+    game.start()
+    game.tick()
+    assert game.snake.previous_body != game.snake.body  # mid-slide
+
+    game.toggle_pause()
+    assert game.snake.previous_body == game.snake.body
+
+
 def test_difficulty_can_only_be_changed_on_the_start_screen(tmp_path):
     game = Game(make_config(tmp_path))
     assert game.set_difficulty("hard") is True
@@ -778,6 +978,7 @@ def test_wall_hit_ends_the_game(tmp_path):
     game.tick()
     assert game.state is GameState.GAME_OVER
     assert game.victory is False
+    assert game.snake.previous_body == game.snake.body
 
 
 def test_self_hit_ends_the_game(tmp_path):
@@ -974,6 +1175,8 @@ def test_same_seed_produces_the_same_initial_food(tmp_path):
         {"combo_multiplier_cap": 0},
         {"volume": -0.1},
         {"volume": 1.1},
+        {"obstacle_count": -1},
+        {"cols": 12, "rows": 12, "obstacles": True, "obstacle_count": 40},
     ],
 )
 def test_invalid_configuration_is_rejected(overrides):

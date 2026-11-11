@@ -3,8 +3,9 @@
 A polished Snake game written in pure Python with [pygame](https://www.pygame.org/).
 It keeps the classic rules, adds a proper start/pause/game-over flow, three
 difficulty levels, combo multipliers, temporary bonus food, wrap-around edges,
-a persistent top-five leaderboard, unlockable achievements, generated sound
-effects and configurable board sizes — with no external art or audio assets.
+an optional obstacle mode, a persistent top-five leaderboard, unlockable
+achievements, generated sound effects and configurable board sizes — with no
+external art or audio assets.
 
 The game rules are completely independent of pygame and are covered by an
 automated test suite that runs headlessly on Linux, macOS and Windows.
@@ -12,7 +13,8 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
 ## Features
 
 - Smooth rendering at 60 FPS with movement on a separate fixed-tick schedule,
-  so speed stays consistent on fast and slow machines.
+  so speed stays consistent on fast and slow machines. The snake glides
+  between cells instead of stepping, so motion looks fluid at every speed.
 - Responsive input with a two-turn buffer. Rapid turns are preserved, while
   180° reversals are always rejected.
 - Start screen, pause/resume, game-over screen, instant restart and a "board
@@ -21,9 +23,12 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
   score grows.
 - Combo scoring: chain foods within a move window for up to 3× points, with a
   live combo meter and floating score popups.
-- Ten persistent achievements, from the first bite to clearing the board.
+- Eleven persistent achievements, from the first bite to clearing the board.
 - Classic solid walls or an optional wrap-around board (`--wrap`) where the
   snake reappears on the opposite edge.
+- An optional obstacle mode (`--obstacles`) that scatters deadly blocks
+  across the board. The snake's starting column is always kept clear, food
+  never spawns inside a block, and the layout is re-rolled every run.
 - Food never spawns inside the snake or on top of the golden bonus. Wall and
   self-collision detection is accurate, including the classic "follow your own
   tail" rule.
@@ -37,8 +42,11 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
   the current speed.
 - Resizable window with aspect-ratio-preserving letterboxing, plus a
   fullscreen toggle (`F11`).
+- A death or board-clearing victory is punctuated with a flash and a brief
+  screen shake.
 - Configurable board dimensions, cell size, starting length, difficulty, edge
-  mode, bonus settings, volume and random seed via command-line options.
+  mode, obstacle count, bonus settings, volume and random seed via
+  command-line options.
 - The game auto-pauses when the window loses focus or is minimised.
 - Score, best score, difficulty, leaderboard and progress feedback are always
   visible.
@@ -105,10 +113,11 @@ Notes:
 | Regular food | 10 points × combo multiplier, grows the snake by one segment |
 | Golden bonus food | 30 points, appears every 5 regular foods, expires after 50 moves |
 | Combo | Up to 3× points for chaining foods within 60 moves |
+| Obstacle block | Deadly on contact, never blocks the starting column |
 | High score | Saved after game over, restart or quitting mid-run |
 | Leaderboard | The best 5 scores persist between sessions |
-| Achievements | 10 milestones persist across every run |
-| Board cleared | Reaching every cell ends the run in victory |
+| Achievements | 11 milestones persist across every run |
+| Board cleared | Reaching every free cell ends the run in victory |
 
 ### Combos
 
@@ -136,10 +145,11 @@ Use `--combo-window N` to make combos more or less forgiving, and
 | Wrap Walker | Wrap around an edge (`--wrap`) |
 | Full Throttle | Reach the maximum speed for the selected difficulty |
 | Veteran | Finish 10 games |
+| Daredevil | Eat 10 foods on an obstacle board (`--obstacles`) |
 | Board Clearer | Fill the entire board |
 
 Unlocks are saved immediately and announced with an in-game toast. The start
-and game-over screens show how many of the ten you have collected.
+and game-over screens show how many of the eleven you have collected.
 
 ### Edge modes
 
@@ -148,6 +158,20 @@ Pass `--wrap` to play on a wrap-around board: leaving one edge immediately
 reappears on the opposite edge. Wrapping never teleports the snake into its
 own body — self-collisions are still detected normally, and the board can
 still be cleared for a victory.
+
+### Obstacle mode
+
+Pass `--obstacles` to scatter deadly stone blocks across the board and
+`--obstacle-count N` to choose how many (default 20, capped at a quarter of
+the board). Touching a block ends the run exactly like a wall, and blocks can
+be combined with `--wrap` for extra chaos. The rules stay fair:
+
+- The snake's entire starting column is always kept clear, so every run
+  begins with a guaranteed escape route.
+- Regular food and golden bonus food never spawn inside a block.
+- A fresh layout is generated for every run (deterministic for a given
+  `--seed`).
+- Victory still means filling every cell that is not a block.
 
 ### Difficulty levels
 
@@ -187,6 +211,9 @@ python snake.py --start-length 5
 # Play on a wrap-around board in fullscreen
 python snake.py --wrap --fullscreen
 
+# Dodge obstacle blocks on a wrap-around board
+python snake.py --obstacles --obstacle-count 30 --wrap
+
 # Make combos friendlier and cap the multiplier at 2x
 python snake.py --combo-window 100 --combo-cap 2
 ```
@@ -208,6 +235,8 @@ python snake.py --combo-window 100 --combo-cap 2
 | `--combo-window N` | Moves allowed between foods to keep a combo (default 60) |
 | `--combo-cap N` | Maximum combo score multiplier (default 3) |
 | `--wrap` | Wrap around the edges instead of hitting solid walls |
+| `--obstacles` | Scatter deadly obstacle blocks across the board |
+| `--obstacle-count N` | Obstacle blocks used with `--obstacles` (default 20, at most a quarter of the board) |
 | `--fullscreen` | Start in fullscreen (toggle with `F11`) |
 | `--mute` | Start with sound muted (toggle with `M`) |
 | `--volume F` | Initial sound volume from 0.0 to 1.0 (default 0.8) |
@@ -259,10 +288,13 @@ and the smoke tests select SDL's dummy video and audio drivers. They cover:
 
 - movement in every direction, turn buffering and rejected reversals
 - solid-wall and wrap-around edges, body collisions and the vacating-tail rule
+- obstacle placement, obstacle collisions, obstacle/wrap combinations and
+  obstacle-board victories
 - food spawning, full boards, scoring, bonus food and expiry
 - combo scaling, expiry, last-move chaining, bonus interaction and score events
 - achievement unlocking, persistence and sanitisation
 - all state transitions, restart, instant restart, victory and game over
+- smooth-rendering bookkeeping (previous body, pause/game-over freezing)
 - high-score, leaderboard and statistics persistence, including corrupt files
 - window scaling, sound volume, configuration validation and pygame/CLI smoke
   tests

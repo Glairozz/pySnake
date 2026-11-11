@@ -20,6 +20,7 @@ from pysnake.config import (
     DEFAULT_CELL_SIZE,
     DEFAULT_COLS,
     DEFAULT_DATA_FILE,
+    DEFAULT_OBSTACLE_COUNT,
     DEFAULT_ROWS,
     DEFAULT_START_LENGTH,
     DEFAULT_VOLUME,
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python snake.py\n"
             "  python snake.py --difficulty hard --seed 42\n"
             "  python snake.py --cols 30 --rows 20 --cell-size 22\n"
-            "  python snake.py --wrap --fullscreen\n"
+            "  python snake.py --wrap --obstacles --fullscreen\n"
             "  python snake.py --data-file scores/highscore.json --no-grid\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -139,6 +140,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="wrap around the edges instead of hitting solid walls",
     )
     parser.add_argument(
+        "--obstacles",
+        action="store_true",
+        help="scatter deadly obstacle blocks across the board",
+    )
+    parser.add_argument(
+        "--obstacle-count",
+        type=int,
+        default=DEFAULT_OBSTACLE_COUNT,
+        help=("number of obstacle blocks used with --obstacles (default: %(default)s)"),
+    )
+    parser.add_argument(
         "--fullscreen",
         action="store_true",
         help="start in fullscreen (toggle in-game with F11)",
@@ -181,6 +193,8 @@ def config_from_args(args: argparse.Namespace) -> GameConfig:
         data_file=args.data_file,
         wrap=args.wrap,
         fullscreen=args.fullscreen,
+        obstacles=args.obstacles,
+        obstacle_count=args.obstacle_count,
         combo_window=args.combo_window,
         combo_multiplier_cap=args.combo_cap,
     )

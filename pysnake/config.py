@@ -28,6 +28,7 @@ DEFAULT_CELL_SIZE = 25
 DEFAULT_HEADER_HEIGHT = 50
 DEFAULT_START_LENGTH = 3
 DEFAULT_VOLUME = 0.8
+DEFAULT_OBSTACLE_COUNT = 20
 
 #: Rendering runs at a steady frame rate; game moves happen on a fixed tick
 #: schedule inside that loop.  This keeps movement timing independent of the
@@ -132,16 +133,21 @@ ACHIEVEMENTS: dict[str, Achievement] = {
         "speed_demon", "Full Throttle", "Reach the maximum speed"
     ),
     "veteran": Achievement("veteran", "Veteran", "Finish 10 games"),
+    "daredevil": Achievement(
+        "daredevil", "Daredevil", "Eat 10 foods on an obstacle board"
+    ),
     "victory": Achievement("victory", "Board Clearer", "Fill the entire board"),
 }
 ACHIEVEMENT_KEYS = tuple(ACHIEVEMENTS)
 
-#: Thresholds for the score, length, bonus, survival and veteran achievements.
+#: Thresholds for the score, length, bonus, survival, veteran and obstacle
+#: achievements.
 CENTURY_SCORE = 100
 LONG_BODY_LENGTH = 15
 BONUS_HUNTER_COUNT = 3
 SURVIVOR_MOVES = 500
 VETERAN_GAMES = 10
+DAREDEVIL_FOODS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +181,10 @@ class GameConfig:
     data_file: Path = field(default_factory=lambda: DEFAULT_DATA_FILE)
     wrap: bool = False
     fullscreen: bool = False
+    #: Scatter deadly obstacle blocks across the board.
+    obstacles: bool = False
+    #: How many obstacle blocks to place when ``obstacles`` is enabled.
+    obstacle_count: int = DEFAULT_OBSTACLE_COUNT
     #: How many moves a combo stays alive between regular foods.
     combo_window: int = 60
     #: The largest score multiplier a combo can reach.
@@ -214,6 +224,12 @@ class GameConfig:
             )
         if self.bonus_every < 1 or self.bonus_lifetime < 1 or self.bonus_points < 0:
             raise ValueError("bonus-food settings must be positive")
+        if self.obstacle_count < 0:
+            raise ValueError("obstacle count must not be negative")
+        if self.obstacles and self.obstacle_count > (self.cols * self.rows) // 4:
+            raise ValueError(
+                "too many obstacles; keep at most a quarter of the board blocked"
+            )
         if self.combo_window < 1 or self.combo_multiplier_cap < 1:
             raise ValueError("combo settings must be positive")
         if not 0.0 <= self.volume <= 1.0:
@@ -276,4 +292,6 @@ COLORS: dict[str, tuple[int, int, int]] = {
     "eye": (18, 22, 30),
     "dim_text": (120, 120, 145),
     "panel": (10, 10, 18),
+    "obstacle": (108, 112, 132),
+    "obstacle_edge": (148, 153, 176),
 }

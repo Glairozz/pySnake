@@ -46,6 +46,24 @@ def test_run_game_plays_until_game_over(tmp_path, monkeypatch):
     assert game.victory is False
 
 
+def test_run_game_with_obstacles_starts_cleanly(tmp_path, monkeypatch):
+    use_dummy_drivers(monkeypatch)
+    config = GameConfig(
+        cols=10,
+        rows=10,
+        obstacles=True,
+        obstacle_count=6,
+        data_file=tmp_path / "scores.json",
+        sound=False,
+    )
+
+    game = run_game(config, max_frames=5)
+
+    assert game.state is GameState.START
+    assert len(game.obstacles) == 6
+    assert game.food.position not in game.obstacles
+
+
 def test_sound_bank_never_crashes_without_audio(monkeypatch):
     use_dummy_drivers(monkeypatch)
     bank = SoundBank(enabled=True)
@@ -140,6 +158,45 @@ def test_renderer_draws_the_game_over_summary_and_fades_the_flash(
     pygame.quit()
 
 
+def test_renderer_smoothes_movement_and_shakes_on_game_over(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    game.start()
+    game.tick()
+    assert game.snake.previous_body != game.snake.body
+
+    # Half-way between ticks the snake is drawn between its cells.
+    renderer.draw(game, sound_enabled=False, volume=0.0, interpolation=0.5)
+
+    renderer.handle_events([GameEvent(EventKind.GAME_OVER, (1, 1))])
+    assert renderer.shake > 0.0
+    renderer.draw(game, sound_enabled=False, volume=0.0)
+    assert renderer.shake > 0.0
+
+    renderer.update(2.0)
+    assert renderer.shake == 0.0
+    pygame.quit()
+
+
+def test_renderer_draws_obstacles_between_the_board_and_the_snake(
+    tmp_path, monkeypatch
+):
+    use_dummy_drivers(monkeypatch)
+    config = GameConfig(
+        cols=10,
+        rows=10,
+        obstacles=True,
+        obstacle_count=4,
+        data_file=tmp_path / "scores.json",
+        sound=False,
+    )
+    game = Game(config)
+    renderer = Renderer(pygame.Surface((config.width, config.height)), config)
+
+    assert len(game.obstacles) == 4
+    renderer.draw(game, sound_enabled=False, volume=0.0)
+    pygame.quit()
+
+
 def test_cli_arguments_build_a_valid_configuration():
     parser = snake.build_parser()
     args = parser.parse_args(
@@ -171,6 +228,9 @@ def test_cli_arguments_build_a_valid_configuration():
             "--combo-cap",
             "4",
             "--wrap",
+            "--obstacles",
+            "--obstacle-count",
+            "8",
             "--fullscreen",
             "--mute",
             "--data-file",
@@ -195,6 +255,8 @@ def test_cli_arguments_build_a_valid_configuration():
     assert config.combo_window == 30
     assert config.combo_multiplier_cap == 4
     assert config.wrap is True
+    assert config.obstacles is True
+    assert config.obstacle_count == 8
     assert config.fullscreen is True
     assert config.sound is False
     assert config.data_file == Path("custom-scores.json")
@@ -219,6 +281,8 @@ def test_cli_help_works_without_opening_a_window(capsys):
     assert "--bonus-every" in output
     assert "--volume" in output
     assert "--wrap" in output
+    assert "--obstacles" in output
+    assert "--obstacle-count" in output
     assert "--fullscreen" in output
 
 

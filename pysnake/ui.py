@@ -174,6 +174,8 @@ class Renderer:
         self.toasts: list[Toast] = []
         self.flash = 0.0
         self.flash_color: tuple[int, int, int] = COLORS["food"]
+        self.shake = 0.0
+        self._shake_rng = random.Random()
         self._overlays: dict[int, pygame.Surface] = {}
         self._create_fonts()
 
@@ -213,6 +215,7 @@ class Renderer:
                 self.particles.burst(event.position, color, 10)
                 self.flash = 0.4
                 self.flash_color = color
+                self.shake = 0.3 if event.kind is EventKind.VICTORY else 0.5
 
     def _add_score_popup(self, event: GameEvent) -> None:
         if event.position is None or event.value <= 0:
@@ -235,6 +238,8 @@ class Renderer:
         self.toasts = [toast for toast in self.toasts if toast.update(dt)]
         if self.flash > 0.0:
             self.flash = max(0.0, self.flash - dt * 1.8)
+        if self.shake > 0.0:
+            self.shake = max(0.0, self.shake - dt * 1.4)
 
     # -- text helpers -------------------------------------------------------
 
@@ -294,13 +299,22 @@ class Renderer:
         *,
         sound_enabled: bool = True,
         volume: float = 0.8,
+        interpolation: float = 0.0,
     ) -> None:
-        """Render the complete frame for *game*."""
+        """Render the complete frame for *game*.
+
+        *interpolation* is the fraction (0..1) of the current move interval
+        that has already elapsed; the snake slides between its previous and
+        current cells accordingly, keeping motion smooth at the render frame
+        rate instead of stepping once per game tick.
+        """
         self._draw_board()
+        if game.obstacles:
+            self._draw_obstacles(game.obstacles)
         self._draw_food(game.food)
         if game.bonus is not None:
             self._draw_bonus(game.bonus)
-        self._draw_snake(game.snake)
+        self._draw_snake(game.snake, interpolation)
         self.particles.draw(self.surface)
         self._draw_floating_text()
         self._draw_header(game)
@@ -316,6 +330,8 @@ class Renderer:
             self._draw_game_over_screen(game)
 
         self._draw_toasts()
+        if self.shake > 0.0:
+            self._apply_shake()
 
     def _leaderboard_line(self, game: Game) -> str | None:
         """Describe the persisted top scores, or None when there are none."""
@@ -359,15 +375,40 @@ class Renderer:
 
     # -- entities -----------------------------------------------------------
 
-    def _draw_snake(self, snake: Snake) -> None:
+    def _segment_position(
+        self,
+        snake: Snake,
+        index: int,
+        progress: float,
+    ) -> tuple[float, float]:
+        """Pixel position of a body segment, smoothed by *progress*.
+
+        Each segment slides from its cell on the previous tick towards its
+        current cell.  Segments that wrapped around an edge (more than one
+        cell apart) or that have no previous cell simply snap into place.
+        """
+        current = snake.body[index]
+        if 0.0 <= progress < 1.0 and index < len(snake.previous_body):
+            previous = snake.previous_body[index]
+            if (
+                abs(current[0] - previous[0]) <= 1
+                and abs(current[1] - previous[1]) <= 1
+            ):
+                size = self.config.cell_size
+                gx = previous[0] + (current[0] - previous[0]) * progress
+                gy = previous[1] + (current[1] - previous[1]) * progress
+                return gx * size, self.config.board_top + gy * size
+        x, y = self.config.cell_origin(*current)
+        return float(x), float(y)
+
+    def _draw_snake(self, snake: Snake, progress: float = 0.0) -> None:
         size = self.config.cell_size
         inset = max(2, size // 8)
         radius = max(2, size // 4)
         length = len(snake.body)
 
         for index in range(length - 1, 0, -1):
-            gx, gy = snake.body[index]
-            x, y = self.config.cell_origin(gx, gy)
+            x, y = self._segment_position(snake, index, progress)
             fade = index / max(1, length - 1)
             body_color = tuple(
                 int(channel * (1.0 - 0.22 * fade)) for channel in COLORS["snake_body"]
@@ -375,7 +416,12 @@ class Renderer:
             pygame.draw.rect(
                 self.surface,
                 body_color,
-                (x + inset, y + inset, size - inset * 2, size - inset * 2),
+                (
+                    round(x) + inset,
+                    round(y) + inset,
+                    size - inset * 2,
+                    size - inset * 2,
+                ),
                 border_radius=radius,
             )
             shadow_height = max(2, size // 7)
@@ -383,15 +429,16 @@ class Renderer:
                 self.surface,
                 COLORS["snake_shadow"],
                 (
-                    x + inset,
-                    y + size - inset - shadow_height,
+                    round(x) + inset,
+                    round(y) + size - inset - shadow_height,
                     size - inset * 2,
                     shadow_height,
                 ),
                 border_radius=max(1, shadow_height // 2),
             )
 
-        head_x, head_y = self.config.cell_origin(*snake.head)
+        head_x, head_y = self._segment_position(snake, 0, progress)
+        head_x, head_y = round(head_x), round(head_y)
         pygame.draw.rect(
             self.surface,
             COLORS["snake_head"],
@@ -411,7 +458,8 @@ class Renderer:
             border_radius=max(2, size // 4),
         )
 
-        center_x, center_y = self.config.cell_center(*snake.head)
+        center_x = head_x + size / 2
+        center_y = head_y + size / 2
         dx, dy = snake.direction
         side = size * 0.20
         forward = size * 0.18
@@ -428,6 +476,42 @@ class Renderer:
                 COLORS["eye"],
                 (int(eye[0]), int(eye[1])),
                 eye_radius,
+            )
+
+    def _draw_obstacles(self, obstacles: frozenset) -> None:
+        """Draw static blocks that end the run when the snake touches them."""
+        size = self.config.cell_size
+        edge = max(1, size // 14)
+        radius = max(2, size // 5)
+        brace = size // 4
+        for gx, gy in sorted(obstacles):
+            x, y = self.config.cell_origin(gx, gy)
+            pygame.draw.rect(
+                self.surface,
+                COLORS["obstacle"],
+                (x + 1, y + 1, size - 2, size - 2),
+                border_radius=radius,
+            )
+            pygame.draw.rect(
+                self.surface,
+                COLORS["obstacle_edge"],
+                (x + 3, y + 3, size - 6, size - 6),
+                width=edge,
+                border_radius=max(1, radius - 2),
+            )
+            pygame.draw.line(
+                self.surface,
+                COLORS["obstacle_edge"],
+                (x + brace, y + brace),
+                (x + size - brace, y + size - brace),
+                edge,
+            )
+            pygame.draw.line(
+                self.surface,
+                COLORS["obstacle_edge"],
+                (x + size - brace, y + brace),
+                (x + brace, y + size - brace),
+                edge,
             )
 
     def _draw_food(self, food: Food) -> None:
@@ -633,6 +717,17 @@ class Renderer:
         tint.fill((*self.flash_color, int(90 * strength)))
         self.surface.blit(tint, (0, 0))
 
+    def _apply_shake(self) -> None:
+        """Jolt the finished frame for a moment after a death or victory."""
+        amplitude = self.shake * max(5.0, self.config.cell_size * 0.6)
+        offset_x = round(self._shake_rng.uniform(-amplitude, amplitude))
+        offset_y = round(self._shake_rng.uniform(-amplitude, amplitude))
+        if offset_x == 0 and offset_y == 0:
+            return
+        snapshot = self.surface.copy()
+        self.surface.fill(COLORS["bg"])
+        self.surface.blit(snapshot, (offset_x, offset_y))
+
     def _draw_toasts(self) -> None:
         if not self.toasts:
             return
@@ -772,6 +867,8 @@ class Renderer:
             footer += f"   Golden food +{config.bonus_points}"
         if config.wrap:
             footer += "   Walls wrap"
+        if config.obstacles:
+            footer += f"   Obstacles {len(game.obstacles)}"
         self._text(
             footer,
             self.small_font,
@@ -887,6 +984,8 @@ class Renderer:
             f"Walls: {'wrap' if config.wrap else 'solid'}    "
             f"Difficulty: {game.difficulty.label.title()}"
         )
+        if config.obstacles:
+            status += f"    Obstacles {len(game.obstacles)}"
         self._text(
             status,
             self.small_font,

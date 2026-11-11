@@ -259,12 +259,14 @@ def run_game(
             "SDL_VIDEODRIVER=dummy for automated tests."
         ) from exc
 
+    game = Game(config)
     mode = "wrap" if config.wrap else "classic"
+    if config.obstacles:
+        mode += f" + {len(game.obstacles)} obstacles"
     pygame.display.set_caption(
         f"pySnake - {config.difficulty_preset.label.title()} "
         f"({config.cols}x{config.rows}, {mode})"
     )
-    game = Game(config)
     # The game always renders at its logical size; the window scales that
     # surface with a preserved aspect ratio, so resizing stays crisp and the
     # HUD layout never has to change.
@@ -305,8 +307,13 @@ def run_game(
 
             if game.state is GameState.PLAYING:
                 accumulator = _advance_game(game, dt, accumulator)
+                # How far the current move interval has elapsed: the renderer
+                # slides the snake between its previous and current cells by
+                # this fraction, so motion stays smooth between ticks.
+                interpolation = min(1.0, accumulator * game.speed)
             else:
                 accumulator = 0.0
+                interpolation = 0.0
 
             events = game.drain_events()
             renderer.handle_events(events)
@@ -316,6 +323,7 @@ def run_game(
                 game,
                 sound_enabled=sound.enabled,
                 volume=sound.volume,
+                interpolation=interpolation,
             )
             _present(screen, canvas)
             pygame.display.flip()
