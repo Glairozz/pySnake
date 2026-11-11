@@ -174,7 +174,8 @@ def save_stats(
 
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(Stats.from_dict(stats.to_dict()).to_dict(), handle, indent=2)
+            # ``to_dict`` already clamps and sanitises every field.
+            json.dump(stats.to_dict(), handle, indent=2)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())

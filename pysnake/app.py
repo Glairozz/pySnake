@@ -20,6 +20,12 @@ from .config import (
     RENDER_FPS,
     GameConfig,
 )
+from .controls import (
+    SWIPE_THRESHOLD,
+    axis_direction,
+    hat_direction,
+    swipe_direction,
+)
 from .logic import EventKind, Game, GameEvent, GameState
 from .ui import Renderer, fit_rect
 
@@ -56,6 +62,13 @@ DIFFICULTY_KEYS = {
     pygame.K_3: "hard",
     pygame.K_KP3: "hard",
 }
+
+#: How long the snake stays still after unpausing, so the player can react.
+RESUME_GRACE = 0.6
+
+#: Gamepad buttons: the bottom face button starts/restarts, Start pauses.
+GAMEPAD_ACCEPT_BUTTON = 0
+GAMEPAD_PAUSE_BUTTON = 7
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +207,13 @@ def _handle_key(
             game.start()
     elif key in DIFFICULTY_KEYS and game.state is GameState.START:
         game.set_difficulty(DIFFICULTY_KEYS[key])
+    elif key == pygame.K_TAB:
+        if game.state is GameState.PLAYING:
+            # Never leave the board running behind an information panel.
+            game.toggle_pause()
+            renderer.show_achievements = True
+        else:
+            renderer.show_achievements = not renderer.show_achievements
     elif key == pygame.K_g:
         renderer.grid_visible = not renderer.grid_visible
     elif key == pygame.K_m:
@@ -236,6 +256,58 @@ def _present(screen: pygame.Surface, canvas: pygame.Surface) -> None:
     screen.blit(pygame.transform.smoothscale(canvas, rect.size), rect)
 
 
+def _set_window_icon() -> None:
+    """Draw a tiny snake-head icon so the window is easy to spot."""
+    try:
+        icon = pygame.Surface((32, 32), pygame.SRCALPHA)
+        pygame.draw.rect(icon, COLORS["snake_head"], (2, 2, 28, 28), border_radius=10)
+        pygame.draw.rect(
+            icon,
+            COLORS["snake_head_inner"],
+            (8, 8, 16, 16),
+            border_radius=5,
+        )
+        pygame.draw.circle(icon, COLORS["eye"], (12, 13), 2)
+        pygame.draw.circle(icon, COLORS["eye"], (20, 13), 2)
+        pygame.display.set_icon(icon)
+    except pygame.error:
+        pass
+
+
+def _open_joysticks() -> list[pygame.joystick.Joystick]:
+    """Initialise and return every connected gamepad, ignoring failures."""
+    joysticks: list[pygame.joystick.Joystick] = []
+    try:
+        if not pygame.joystick.get_init():
+            pygame.joystick.init()
+        for index in range(pygame.joystick.get_count()):
+            joystick = pygame.joystick.Joystick(index)
+            joystick.init()
+            joysticks.append(joystick)
+    except pygame.error:
+        return []
+    return joysticks
+
+
+def _poll_gamepads(
+    joysticks: list[pygame.joystick.Joystick],
+    last_directions: dict[int, tuple[int, int] | None],
+    game: Game,
+) -> None:
+    """Turn a held analogue stick into a single direction change per push."""
+    for joystick in joysticks:
+        try:
+            x = joystick.get_axis(0)
+            y = joystick.get_axis(1)
+            instance = joystick.get_instance_id()
+        except pygame.error:
+            continue
+        direction = axis_direction(x, y)
+        if direction is not None and direction != last_directions.get(instance):
+            game.turn(direction)
+        last_directions[instance] = direction
+
+
 def run_game(
     config: GameConfig | None = None,
     max_frames: int | None = None,
@@ -259,6 +331,7 @@ def run_game(
             "SDL_VIDEODRIVER=dummy for automated tests."
         ) from exc
 
+    _set_window_icon()
     game = Game(config)
     mode = "wrap" if config.wrap else "classic"
     if config.obstacles:
@@ -274,13 +347,22 @@ def run_game(
     renderer = Renderer(canvas, config)
     sound = SoundBank(config.sound, config.volume)
     clock = pygame.time.Clock()
+    joysticks = _open_joysticks()
+    stick_directions: dict[int, tuple[int, int] | None] = {}
+    swipe_start: tuple[float, float] | None = None
 
     running = True
     frames = 0
     accumulator = 0.0
+    resume_delay = 0.0
     pause_events = {
         getattr(pygame, name)
         for name in ("WINDOWFOCUSLOST", "WINDOWMINIMIZED")
+        if hasattr(pygame, name)
+    }
+    joystick_events = {
+        getattr(pygame, name)
+        for name in ("JOYDEVICEADDED", "JOYDEVICEREMOVED")
         if hasattr(pygame, name)
     }
 
@@ -302,10 +384,61 @@ def run_game(
                     screen = pygame.display.set_mode(size, pygame.RESIZABLE)
                 elif event.type in pause_events and game.state is GameState.PLAYING:
                     game.toggle_pause()
+                elif event.type in joystick_events:
+                    joysticks = _open_joysticks()
+                    stick_directions.clear()
+                elif event.type == pygame.JOYHATMOTION:
+                    direction = hat_direction(*event.value)
+                    if direction is not None:
+                        game.turn(direction)
+                elif event.type == pygame.JOYBUTTONDOWN:
+                    if event.button == GAMEPAD_ACCEPT_BUTTON:
+                        if game.state is GameState.START:
+                            game.start()
+                        elif game.state is GameState.GAME_OVER:
+                            game.restart()
+                    elif event.button == GAMEPAD_PAUSE_BUTTON:
+                        game.toggle_pause()
+                elif event.type == pygame.FINGERDOWN:
+                    swipe_start = (event.x * config.width, event.y * config.height)
+                elif event.type == pygame.FINGERUP:
+                    if swipe_start is not None:
+                        direction = swipe_direction(
+                            event.x * config.width - swipe_start[0],
+                            event.y * config.height - swipe_start[1],
+                            SWIPE_THRESHOLD,
+                        )
+                        if direction is not None:
+                            game.turn(direction)
+                    swipe_start = None
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    swipe_start = event.pos
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if swipe_start is not None:
+                        direction = swipe_direction(
+                            event.pos[0] - swipe_start[0],
+                            event.pos[1] - swipe_start[1],
+                            SWIPE_THRESHOLD,
+                        )
+                        if direction is not None:
+                            game.turn(direction)
+                    swipe_start = None
             if not running:
                 break
 
-            if game.state is GameState.PLAYING:
+            _poll_gamepads(joysticks, stick_directions, game)
+
+            # Resume events arm a short grace period, so unpausing never drops
+            # the player straight into a wall while their hands are still on
+            # the pause key.
+            events = game.drain_events()
+            for event in events:
+                if event.kind is EventKind.STARTED:
+                    resume_delay = 0.0
+                elif event.kind is EventKind.RESUMED:
+                    resume_delay = RESUME_GRACE
+
+            if game.state is GameState.PLAYING and resume_delay <= 0.0:
                 accumulator = _advance_game(game, dt, accumulator)
                 # How far the current move interval has elapsed: the renderer
                 # slides the snake between its previous and current cells by
@@ -315,7 +448,10 @@ def run_game(
                 accumulator = 0.0
                 interpolation = 0.0
 
-            events = game.drain_events()
+            if resume_delay > 0.0:
+                resume_delay = max(0.0, resume_delay - dt)
+
+            events += game.drain_events()
             renderer.handle_events(events)
             sound.handle_events(events)
             renderer.update(dt)
@@ -324,6 +460,7 @@ def run_game(
                 sound_enabled=sound.enabled,
                 volume=sound.volume,
                 interpolation=interpolation,
+                grace=resume_delay,
             )
             _present(screen, canvas)
             pygame.display.flip()

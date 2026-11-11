@@ -17,6 +17,10 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
   between cells instead of stepping, so motion looks fluid at every speed.
 - Responsive input with a two-turn buffer. Rapid turns are preserved, while
   180° reversals are always rejected.
+- Play with the keyboard, a gamepad (analogue stick, d-pad and buttons) or by
+  swiping on a touchscreen or with the mouse.
+- A short "READY" grace period after unpausing, so the snake never moves again
+  before your hands are back on the controls.
 - Start screen, pause/resume, game-over screen, instant restart and a "board
   cleared" victory state.
 - Three difficulty levels (Easy, Normal, Hard) that increase speed as the
@@ -24,6 +28,8 @@ automated test suite that runs headlessly on Linux, macOS and Windows.
 - Combo scoring: chain foods within a move window for up to 3× points, with a
   live combo meter and floating score popups.
 - Eleven persistent achievements, from the first bite to clearing the board.
+  Press `TAB` on any menu screen to open a panel listing all of them, including
+  the ones still locked.
 - Classic solid walls or an optional wrap-around board (`--wrap`) where the
   snake reappears on the opposite edge.
 - An optional obstacle mode (`--obstacles`) that scatters deadly blocks
@@ -91,6 +97,7 @@ resizable, and `F11` toggles fullscreen; the board scales without distortion.
 | `SPACE` / `ENTER` | Start from the start screen, or restart after game over |
 | `P` | Pause / resume |
 | `R` | Restart the current run immediately (also works after game over) |
+| `TAB` | Show / hide the achievements panel (pauses a live game) |
 | `1`, `2`, `3` | Choose Easy, Normal or Hard on the start screen |
 | `G` | Show / hide the grid |
 | `M` | Mute / unmute sound effects |
@@ -98,11 +105,23 @@ resizable, and `F11` toggles fullscreen; the board scales without distortion.
 | `F11` | Toggle fullscreen |
 | `ESC` | Quit |
 
+### Gamepad and touch
+
+- Connected gamepads are detected automatically, including ones plugged in
+  while the game is running. Use the left stick or d-pad to steer, the bottom
+  face button (`A` on most pads) to start or restart, and `Start` to pause.
+- On a touchscreen, swipe in the direction you want the snake to turn. A
+  mouse drag does the same on a desktop, which is handy for quick demos.
+- Swipes shorter than a few dozen pixels are ignored, so a stray tap never
+  steers.
+
 Notes:
 
 - A direction key that would reverse the snake into its own neck is ignored.
 - Up to two turns can be buffered, so two quick key presses both execute.
 - The game pauses automatically when the window loses focus.
+- After resuming from pause, a brief "READY" grace period keeps the snake still
+  for a moment before it moves again.
 - The window can be resized freely; the board keeps its aspect ratio and is
   centred with letterbox bars when necessary.
 
@@ -287,6 +306,7 @@ The tests run headlessly: the game-logic tests need only the standard library,
 and the smoke tests select SDL's dummy video and audio drivers. They cover:
 
 - movement in every direction, turn buffering and rejected reversals
+- gamepad axis/d-pad mapping, swipe gestures and gamepad polling
 - solid-wall and wrap-around edges, body collisions and the vacating-tail rule
 - obstacle placement, obstacle collisions, obstacle/wrap combinations and
   obstacle-board victories
@@ -295,6 +315,7 @@ and the smoke tests select SDL's dummy video and audio drivers. They cover:
 - achievement unlocking, persistence and sanitisation
 - all state transitions, restart, instant restart, victory and game over
 - smooth-rendering bookkeeping (previous body, pause/game-over freezing)
+- the achievements panel, the resume grace period and menu key handling
 - high-score, leaderboard and statistics persistence, including corrupt files
 - window scaling, sound volume, configuration validation and pygame/CLI smoke
   tests
@@ -315,11 +336,13 @@ snake.py              Command-line entry point and argument parsing
 pysnake/
   config.py           Configuration, difficulty presets, colours, limits
   logic.py            Pure game rules, entities and state machine (no pygame)
+  controls.py         Gamepad/swipe-to-direction mapping (no pygame)
   storage.py          Atomic high-score/statistics persistence
   ui.py               pygame renderer, overlays and particles
-  app.py              Main loop, keyboard handling and generated sounds
+  app.py              Main loop, input handling and generated sounds
 tests/
   test_logic.py       Gameplay and state-machine tests
+  test_controls.py    Gamepad and swipe input-mapping tests
   test_storage.py     Persistence and invalid-data tests
   test_app.py         Headless pygame smoke tests and CLI tests
 pytest.ini            Pytest configuration
@@ -353,6 +376,12 @@ read-only directory). Point the game at a writable file:
 ```bash
 python snake.py --data-file ~/pysnake-scores.json
 ```
+
+**The gamepad is not detected**
+Make sure the controller is connected before or after launching; pySnake
+rescans whenever a device is added or removed. Some controllers report their
+d-pad as a hat and others as buttons, and only the left stick is mapped. If
+nothing responds, the keyboard always works and needs no setup.
 
 **The window is too large or too small**
 Adjust `--cols`, `--rows` and `--cell-size`. The game refuses combinations

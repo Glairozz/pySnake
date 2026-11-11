@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pygame
 
 from .config import (
+    ACHIEVEMENT_KEYS,
     ACHIEVEMENTS,
     COLORS,
     DIFFICULTIES,
@@ -175,6 +176,7 @@ class Renderer:
         self.flash = 0.0
         self.flash_color: tuple[int, int, int] = COLORS["food"]
         self.shake = 0.0
+        self.show_achievements = False
         self._shake_rng = random.Random()
         self._overlays: dict[int, pygame.Surface] = {}
         self._create_fonts()
@@ -300,13 +302,16 @@ class Renderer:
         sound_enabled: bool = True,
         volume: float = 0.8,
         interpolation: float = 0.0,
+        grace: float = 0.0,
     ) -> None:
         """Render the complete frame for *game*.
 
         *interpolation* is the fraction (0..1) of the current move interval
         that has already elapsed; the snake slides between its previous and
         current cells accordingly, keeping motion smooth at the render frame
-        rate instead of stepping once per game tick.
+        rate instead of stepping once per game tick.  *grace* is the remaining
+        resume delay in seconds; while it is positive a "READY" hint is drawn
+        so the player knows the snake is about to move again.
         """
         self._draw_board()
         if game.obstacles:
@@ -329,6 +334,10 @@ class Renderer:
         elif game.state is GameState.GAME_OVER:
             self._draw_game_over_screen(game)
 
+        if grace > 0.0 and game.state is GameState.PLAYING:
+            self._draw_ready(grace)
+        if self.show_achievements and game.state is not GameState.PLAYING:
+            self._draw_achievements_panel(game)
         self._draw_toasts()
         if self.shake > 0.0:
             self._apply_shake()
@@ -806,7 +815,7 @@ class Renderer:
         y += title_h + gaps[0]
 
         self._text(
-            "Press an arrow key or WASD to begin",
+            "Press a direction key, swipe or use a gamepad",
             self.heading_font,
             COLORS["text"],
             (center_x, y + prompt_h // 2),
@@ -851,8 +860,8 @@ class Renderer:
 
         sound_state = "off" if not sound_enabled else f"{int(volume * 100)}%"
         controls = (
-            f"P pause   R restart   G grid   M sound ({sound_state})   "
-            "F11 fullscreen   ESC quit"
+            f"P pause   R restart   TAB achievements   G grid   "
+            f"M sound ({sound_state})   F11 fullscreen   ESC quit"
         )
         self._text(
             controls,
@@ -992,7 +1001,7 @@ class Renderer:
             COLORS["dim_text"],
             (config.width // 2, int(config.height * 0.57)),
         )
-        hints = "R restarts   [ ] changes volume   G grid   M sound"
+        hints = "R restarts   TAB achievements   [ ] volume   G grid   M sound"
         self._text(
             hints,
             self.small_font,
@@ -1066,7 +1075,7 @@ class Renderer:
         )
         lines.append(
             (
-                "ESC quits the game",
+                "TAB achievements   ESC quits the game",
                 self.small_font,
                 COLORS["dim_text"],
                 int(6 * scale),
@@ -1086,3 +1095,85 @@ class Renderer:
                 shadow=COLORS["bg"] if font is self.title_font else None,
             )
             y += font.get_height()
+
+    # -- overlays -----------------------------------------------------------
+
+    def _draw_ready(self, grace: float) -> None:
+        """A short, fading "READY" hint while the resume grace runs out."""
+        alpha = int(255 * min(1.0, grace / 0.3))
+        center = (
+            self.config.width // 2,
+            self.config.board_top + self.config.rows * self.config.cell_size // 2,
+        )
+        shadow = self.heading_font.render("READY", True, COLORS["bg"])
+        shadow.set_alpha(alpha)
+        self.surface.blit(
+            shadow,
+            shadow.get_rect(center=(center[0] + 2, center[1] + 2)),
+        )
+        image = self.heading_font.render("READY", True, COLORS["accent"])
+        image.set_alpha(alpha)
+        self.surface.blit(image, image.get_rect(center=center))
+
+    def _draw_achievements_panel(self, game: Game) -> None:
+        """List every achievement, marking the ones the player unlocked."""
+        config = self.config
+        self.surface.blit(self._overlay(225), (0, 0))
+
+        unlocked = set(game.stats.achievements)
+        title_h = self.heading_font.get_height()
+        hint_h = self.small_font.get_height()
+        panel_w = min(config.width - 24, 560)
+        available = max(120, config.height - 32)
+        row_h = max(
+            9,
+            min(
+                self.small_font.get_height() + 4,
+                (available - title_h - hint_h - 34) // len(ACHIEVEMENT_KEYS),
+            ),
+        )
+        panel_h = title_h + 10 + row_h * len(ACHIEVEMENT_KEYS) + 12 + hint_h
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((8, 8, 16, 235))
+        pygame.draw.rect(
+            panel,
+            (*COLORS["accent"], 200),
+            panel.get_rect(),
+            width=2,
+            border_radius=10,
+        )
+        rect = panel.get_rect(center=(config.width // 2, config.height // 2))
+        self.surface.blit(panel, rect)
+
+        title = f"ACHIEVEMENTS  {len(unlocked)}/{len(ACHIEVEMENTS)}"
+        self._text(
+            title,
+            self.heading_font,
+            COLORS["accent"],
+            (rect.centerx, rect.top + 10 + title_h // 2),
+            max_width=panel_w - 24,
+        )
+
+        left = rect.left + 18
+        y = rect.top + 10 + title_h + 4
+        for key in ACHIEVEMENT_KEYS:
+            achievement = ACHIEVEMENTS[key]
+            done = key in unlocked
+            marker = "[x]" if done else "[ ]"
+            color = COLORS["snake_head"] if done else COLORS["dim_text"]
+            self._text_left(
+                f"{marker} {achievement.label} - {achievement.description}",
+                self.small_font,
+                color,
+                (left, y + row_h // 2),
+                max_width=panel_w - 36,
+            )
+            y += row_h
+
+        self._text(
+            "TAB closes this panel",
+            self.small_font,
+            COLORS["dim_text"],
+            (rect.centerx, rect.bottom - 6 - hint_h // 2),
+            max_width=panel_w - 24,
+        )

@@ -8,7 +8,14 @@ import pygame
 import pytest
 
 import snake
-from pysnake.app import SoundBank, _handle_key, _present, run_game
+from pysnake.app import (
+    SoundBank,
+    _handle_key,
+    _open_joysticks,
+    _poll_gamepads,
+    _present,
+    run_game,
+)
 from pysnake.config import DIFFICULTIES, GameConfig
 from pysnake.logic import EventKind, Game, GameEvent, GameState
 from pysnake.ui import Renderer, fit_rect
@@ -335,4 +342,155 @@ def test_sound_volume_is_clamped_and_toggle_preserves_it(monkeypatch):
     assert bank.change_volume(0.3) == 0.3
     assert bank.toggle() is bank.available
     assert bank.volume == 0.3
+    pygame.quit()
+
+
+# ---------------------------------------------------------------------------
+# Achievements panel, resume grace and extra input devices
+# ---------------------------------------------------------------------------
+
+
+def test_tab_opens_the_achievements_panel_and_pauses_the_game(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    assert renderer.show_achievements is False
+
+    # On the start screen TAB only toggles the information panel.
+    assert _handle_key(pygame.K_TAB, game, renderer, sound) is True
+    assert renderer.show_achievements is True
+    assert game.state is GameState.START
+
+    # Opening it mid-run pauses the game, so the snake cannot die behind it.
+    game.start()
+    assert _handle_key(pygame.K_TAB, game, renderer, sound) is True
+    assert game.state is GameState.PAUSED
+    assert renderer.show_achievements is True
+
+    # From the pause screen TAB hides it again without resuming.
+    assert _handle_key(pygame.K_TAB, game, renderer, sound) is True
+    assert renderer.show_achievements is False
+    assert game.state is GameState.PAUSED
+    pygame.quit()
+
+
+def test_renderer_draws_the_achievements_panel(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    game.stats.unlock("first_bite")
+    renderer.show_achievements = True
+    renderer.draw(game, sound_enabled=False, volume=0.0)
+    with_panel = pygame.image.tostring(renderer.surface, "RGB")
+
+    renderer.show_achievements = False
+    renderer.draw(game, sound_enabled=False, volume=0.0)
+    without_panel = pygame.image.tostring(renderer.surface, "RGB")
+
+    # The panel covers most of the screen, so it must change many pixels.
+    differing = sum(
+        1
+        for with_pixel, without_pixel in zip(with_panel, without_panel)
+        if with_pixel != without_pixel
+    )
+    assert differing > 20000
+    pygame.quit()
+
+
+def test_renderer_draws_the_ready_hint_during_the_resume_grace(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    game.start()
+
+    renderer.draw(game, sound_enabled=False, volume=0.0)
+    without_hint = pygame.image.tostring(renderer.surface, "RGB")
+    renderer.draw(game, sound_enabled=False, volume=0.0, grace=0.5)
+    with_hint = pygame.image.tostring(renderer.surface, "RGB")
+
+    assert with_hint != without_hint
+    pygame.quit()
+
+
+def test_resume_grace_delays_the_next_move(tmp_path, monkeypatch):
+    use_dummy_drivers(monkeypatch)
+    monkeypatch.setattr("pysnake.app.RESUME_GRACE", 10.0)
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_UP))
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_p))
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_p))
+    config = GameConfig(
+        cols=8,
+        rows=8,
+        data_file=tmp_path / "scores.json",
+        sound=False,
+    )
+
+    game = run_game(config, max_frames=6)
+
+    assert game.state is GameState.PLAYING
+    assert game.moves == 0
+
+
+def test_the_snake_moves_again_after_the_grace_period(tmp_path, monkeypatch):
+    use_dummy_drivers(monkeypatch)
+    monkeypatch.setattr("pysnake.app.RESUME_GRACE", 0.0)
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_UP))
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_p))
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_p))
+    config = GameConfig(
+        cols=8,
+        rows=8,
+        data_file=tmp_path / "scores.json",
+        sound=False,
+    )
+
+    game = run_game(config, max_frames=30)
+
+    assert game.moves > 0
+
+
+def test_open_joysticks_is_safe_without_a_controller(monkeypatch):
+    use_dummy_drivers(monkeypatch)
+    assert isinstance(_open_joysticks(), list)
+    pygame.quit()
+
+
+class _FakeJoystick:
+    """The small slice of the pygame joystick API that pySnake polls."""
+
+    def __init__(self, x: float = 0.0, y: float = 0.0) -> None:
+        self.x = x
+        self.y = y
+
+    def get_axis(self, index: int) -> float:
+        return self.x if index == 0 else self.y
+
+    def get_instance_id(self) -> int:
+        return 7
+
+
+def test_poll_gamepads_steers_the_snake(tmp_path, monkeypatch):
+    game, renderer, sound = _make_ui(tmp_path, monkeypatch)
+    game.start()
+    joystick = _FakeJoystick()
+    last: dict[int, tuple[int, int] | None] = {}
+
+    _poll_gamepads([joystick], last, game)
+    assert game.snake.next_direction == (0, -1)
+
+    joystick.x = 1.0
+    _poll_gamepads([joystick], last, game)
+    assert game.snake.next_direction == (1, 0)
+    game.tick()
+
+    joystick.x = 0.0
+    joystick.y = 1.0
+    _poll_gamepads([joystick], last, game)
+    assert game.snake.next_direction == (0, 1)
+    game.tick()
+
+    joystick.y = 0.0
+    joystick.x = -1.0
+    _poll_gamepads([joystick], last, game)
+    assert game.snake.next_direction == (-1, 0)
+    game.tick()
+
+    # A reversed stick never turns the snake back into itself.
+    joystick.x = 1.0
+    _poll_gamepads([joystick], last, game)
+    assert game.snake.next_direction == (-1, 0)
     pygame.quit()
